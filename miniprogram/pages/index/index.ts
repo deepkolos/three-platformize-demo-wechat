@@ -70,9 +70,8 @@ Page({
 
   initCanvas(canvas) {
     const platform = new WechatPlatform(canvas);
-
     this.platform = platform;
-    platform.enableDeviceOrientation('game')
+    platform.enableDeviceOrientation('game');
     PLATFORM.set(platform);
 
     console.log(window.innerWidth, window.innerHeight)

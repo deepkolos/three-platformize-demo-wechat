@@ -45723,6 +45723,9 @@ class WechatPlatform {
 
     this.onDeviceMotionChange = e => {
       e.type = 'deviceorientation';
+      e.alpha *= -1;
+      e.beta *= -1;
+      e.gamma *= -1;
       this.window.dispatchEvent(e);
     };
   }
@@ -49702,6 +49705,11 @@ class Demo {
     this.deps = deps;
   }
 
+  reset() {
+    this.deps.camera.position.set(0, 0, 0);
+    this.deps.camera.quaternion.set(0, 0, 0, 1);
+  }
+
   
 
 
@@ -50964,8 +50972,7 @@ class DemoGLTFLoader extends Demo {
   }
 
   dispose() {
-    this.deps.camera.position.set(0, 0, 0);
-    this.deps.camera.quaternion.set(0, 0, 0, 1);
+    this.reset();
     this.orbitControl.dispose();
     this.mixer.stopAllAction();
     this.mixer.uncacheRoot(this.gltf.scene);
@@ -51128,6 +51135,7 @@ class DemoThreeSpritePlayer extends Demo {
   }
 
   dispose() {
+    this.reset();
     this.deps.scene.remove(this.mesh);
     this.deps.scene.remove(this.box);
     this.player.dispose();
@@ -51320,12 +51328,6 @@ class DemoDeviceOrientationControls extends Demo {
     this.deps.scene.add(helper);
     this.mesh = mesh;
     this.helper = helper;
-
-    this.control.deviceOrientation = {
-      alpha: 90,
-      beta: 90,
-      gamma: 90,
-    };
   }
 
   update() {
@@ -51333,8 +51335,7 @@ class DemoDeviceOrientationControls extends Demo {
   }
 
   dispose() {
-    this.deps.camera.position.set(0, 0, 0);
-    this.deps.camera.quaternion.set(0, 0, 0, 1);
+    this.reset();
     this.deps.scene.remove(this.mesh);
     this.deps.scene.remove(this.helper);
     this.control.disconnect();
@@ -51415,7 +51416,6 @@ Page({
 
   initCanvas(canvas) {
     const platform = new WechatPlatform(canvas);
-
     this.platform = platform;
     platform.enableDeviceOrientation('game');
     PLATFORM.set(platform);
