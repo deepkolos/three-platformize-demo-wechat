@@ -45436,9 +45436,10 @@ class EventTarget {
       event.stopPropagation = () => {};
     }
 
-    const map = _events.get(this);
-    if (map) {
-      const listeners = map[event.type];
+    const events = _events.get(this);
+
+    if (events) {
+      const listeners = events[event.type];
 
       if (listeners) {
         for (let i = 0; i < listeners.length; i++) {
@@ -45446,28 +45447,6 @@ class EventTarget {
         }
       }
     }
-  }
-
-  dispatchTouchEvent(e = {}) {
-    const target = {
-      ...this,
-    };
-
-    const event = {
-      changedTouches: e.changedTouches.map(touch => new Touch(touch)),
-      touches: e.touches.map(touch => new Touch(touch)),
-      targetTouches: Array.prototype.slice.call(
-        e.touches.map(touch => new Touch(touch)),
-      ),
-      timeStamp: e.timeStamp,
-      target: target,
-      currentTarget: target,
-      type: e.type,
-      cancelBubble: false,
-      cancelable: false,
-    };
-
-    this.dispatchEvent(event);
   }
 }
 
@@ -45706,10 +45685,12 @@ function OffscreenCanvas() {
 }
 
 class WechatPlatform {
-  constructor(canvas) {
+  constructor(canvas, width, height) {
     const systemInfo = wx.getSystemInfoSync();
 
     this.canvas = canvas;
+    this.canvasW = width === undefined ? canvas.width : width;
+    this.canvasH = height === undefined ? canvas.height : height;
 
     this.document = {
       createElementNS(_, type) {
@@ -45747,6 +45728,8 @@ class WechatPlatform {
   }
 
   patchCanvas() {
+    const { canvasH, canvasW } = this;
+
     Object.defineProperty(this.canvas, 'style', {
       get() {
         return {
@@ -45758,13 +45741,13 @@ class WechatPlatform {
 
     Object.defineProperty(this.canvas, 'clientHeight', {
       get() {
-        return this.height;
+        return canvasH || this.height;
       },
     });
 
     Object.defineProperty(this.canvas, 'clientWidth', {
       get() {
-        return this.width;
+        return canvasW || this.width;
       },
     });
 
@@ -45805,6 +45788,28 @@ class WechatPlatform {
         fail: reject,
       });
     });
+  }
+
+  dispatchTouchEvent(e = {}) {
+    const target = {
+      ...this,
+    };
+
+    const event = {
+      changedTouches: e.changedTouches.map(touch => new Touch(touch)),
+      touches: e.touches.map(touch => new Touch(touch)),
+      targetTouches: Array.prototype.slice.call(
+        e.touches.map(touch => new Touch(touch)),
+      ),
+      timeStamp: e.timeStamp,
+      target: target,
+      currentTarget: target,
+      type: e.type,
+      cancelBubble: false,
+      cancelable: false,
+    };
+
+    this.canvas.dispatchEvent(event);
   }
 
   dispose() {
@@ -50894,6 +50899,7 @@ var MapControls = function ( object, domElement ) {
 MapControls.prototype = Object.create( EventDispatcher.prototype );
 MapControls.prototype.constructor = MapControls;
 
+function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
 class DemoGLTFLoader extends Demo {
   
   
@@ -50902,8 +50908,10 @@ class DemoGLTFLoader extends Demo {
   
 
   async init() {
-    const gltf = await this.deps.gltfLoader.loadAsync('https://dtmall-tel.alicdn.com/edgeComputingConfig/upload_models/1591673169101/RobotExpressive.glb'); 
-    gltf.scene.position.z = -5;
+    const gltf = (await this.deps.gltfLoader.loadAsync(
+      'https://dtmall-tel.alicdn.com/edgeComputingConfig/upload_models/1591673169101/RobotExpressive.glb',
+    )) ;
+    gltf.scene.position.z = 2.5;
     gltf.scene.position.y = -2;
 
     this.gltf = gltf;
@@ -50913,18 +50921,19 @@ class DemoGLTFLoader extends Demo {
     this.deps.scene.add(gltf.scene);
     this.deps.scene.add(this.directionalLight);
     this.deps.scene.add(this.ambientLight);
+    this.deps.camera.position.z = 10;
 
     // init animtion
     const states = [
-      "Idle",
-      "Walking",
-      "Running",
-      "Dance",
-      "Death",
-      "Sitting",
-      "Standing",
+      'Idle',
+      'Walking',
+      'Running',
+      'Dance',
+      'Death',
+      'Sitting',
+      'Standing',
     ];
-    const emotes = ["Jump", "Yes", "No", "Wave", "Punch", "ThumbsUp"];
+    const emotes = ['Jump', 'Yes', 'No', 'Wave', 'Punch', 'ThumbsUp'];
     this.mixer = new AnimationMixer(gltf.scene);
     const actions = {};
     for (let i = 0; i < gltf.animations.length; i++) {
@@ -50937,18 +50946,26 @@ class DemoGLTFLoader extends Demo {
       }
     }
 
-    const activeAction = actions["Walking"];
+    const activeAction = actions['Walking'];
     activeAction.play();
 
     // init controls
-    this.orbitControl = new OrbitControls(this.deps.camera, this.deps.renderer.domElement);
+    this.orbitControl = new OrbitControls(
+      this.deps.camera,
+      this.deps.renderer.domElement,
+    );
+    this.orbitControl.enableDamping = true;
+    this.orbitControl.dampingFactor = 0.05;
   }
 
   update() {
-    this.mixer.update(this.deps.clock.getDelta());
+    _optionalChain([this, 'access', _ => _.mixer, 'optionalAccess', _2 => _2.update, 'call', _3 => _3(this.deps.clock.getDelta())]);
+    _optionalChain([this, 'access', _4 => _4.orbitControl, 'optionalAccess', _5 => _5.update, 'call', _6 => _6()]);
   }
 
   dispose() {
+    this.deps.camera.position.set(0, 0, 0);
+    this.deps.camera.quaternion.set(0, 0, 0, 1);
     this.orbitControl.dispose();
     this.mixer.stopAllAction();
     this.mixer.uncacheRoot(this.gltf.scene);
@@ -50963,7 +50980,7 @@ class DemoGLTFLoader extends Demo {
   }
 }
 
-function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } } function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
+function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } } function _optionalChain$1(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
 
 class ThreeSpritePlayer {
    __init() {this.currFrame = 0;}
@@ -51044,7 +51061,7 @@ class ThreeSpritePlayer {
   }
 
    dispose() {
-    _optionalChain([this, 'access', _ => _.mesh, 'optionalAccess', _2 => _2.material, 'access', _3 => _3.dispose, 'call', _4 => _4()]);
+    _optionalChain$1([this, 'access', _ => _.mesh, 'optionalAccess', _2 => _2.material, 'access', _3 => _3.dispose, 'call', _4 => _4()]);
     this.tiles.forEach(texture => texture.dispose());
     this.tiles.length = 0;
     this.mesh = null;
@@ -51285,15 +51302,18 @@ class DemoDeviceOrientationControls extends Demo {
     this.control = new DeviceOrientationControls(this.deps.camera);
 
     const geometry = new SphereBufferGeometry(500, 60, 40);
-    geometry.scale(- 1, 1, 1);
+    geometry.scale(-1, 1, 1);
     const material = new MeshBasicMaterial({
-      map: await this.deps.textureLoader.loadAsync('/imgs/360.jpg')
+      map: await this.deps.textureLoader.loadAsync('/imgs/360.jpg'),
       // color: 0x123456
     });
     const mesh = new Mesh(geometry, material);
 
     const helperGeometry = new BoxBufferGeometry(100, 100, 100, 4, 4, 4);
-    const helperMaterial = new MeshBasicMaterial({ color: 0xff00ff, wireframe: true });
+    const helperMaterial = new MeshBasicMaterial({
+      color: 0xff00ff,
+      wireframe: true,
+    });
     const helper = new Mesh(helperGeometry, helperMaterial);
 
     this.deps.scene.add(mesh);
@@ -51325,7 +51345,7 @@ class DemoDeviceOrientationControls extends Demo {
   }
 }
 
-function _optionalChain$1(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// index.ts
+function _optionalChain$2(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// index.ts
 
 const DEMO_MAP = {
   GLTFLoader: DemoGLTFLoader,
@@ -51339,6 +51359,7 @@ Page({
   switchingItem: false,
   deps: {} ,
   currDemo: null ,
+  platform: null ,
 
   data: {
     showMenu: true,
@@ -51364,10 +51385,6 @@ Page({
   },
 
   onMenuClick() {
-    this.toggleMenu();
-  },
-
-  toggleMenu() {
     const showMenu = !this.data.showMenu;
     if (showMenu) {
       this.setData({ showMenu, showCanvas: false });
@@ -51388,15 +51405,17 @@ Page({
     const demo = new (DEMO_MAP[item])(this.deps) ;
     await demo.init();
 
-    _optionalChain$1([(this.currDemo ), 'optionalAccess', _ => _.dispose, 'call', _2 => _2()]);
+    _optionalChain$2([(this.currDemo ), 'optionalAccess', _ => _.dispose, 'call', _2 => _2()]);
     this.currDemo = demo;
     this.setData({ currItem: i });
-    this.toggleMenu();
+    this.onMenuClick();
     this.switchingItem = false;
   },
 
   initCanvas(canvas) {
     const platform = new WechatPlatform(canvas);
+
+    this.platform = platform;
     platform.enableDeviceOrientation('game');
     PLATFORM.set(platform);
 
@@ -51420,16 +51439,28 @@ Page({
     const render = () => {
       if (this.disposing) return
       $requestAnimationFrame(render);
-      _optionalChain$1([(this.currDemo ), 'optionalAccess', _3 => _3.update, 'call', _4 => _4()]);
+      _optionalChain$2([(this.currDemo ), 'optionalAccess', _3 => _3.update, 'call', _4 => _4()]);
       renderer.render(scene, camera);
     };
 
     render();
   },
 
+  onTS(e) {
+    this.platform.dispatchTouchEvent(e);
+  },
+
+  onTM(e) {
+    this.platform.dispatchTouchEvent(e);
+  },
+
+  onTE(e) { 
+    this.platform.dispatchTouchEvent(e);
+  },
+
   onUnload() {
     this.disposing = true;
-    _optionalChain$1([(this.currDemo ), 'optionalAccess', _5 => _5.dispose, 'call', _6 => _6()]);
+    _optionalChain$2([(this.currDemo ), 'optionalAccess', _5 => _5.dispose, 'call', _6 => _6()]);
     PLATFORM.dispose();
   }
 });

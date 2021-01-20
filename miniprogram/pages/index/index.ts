@@ -16,6 +16,7 @@ Page({
   switchingItem: false,
   deps: {} as DemoDeps,
   currDemo: null as unknown as Demo,
+  platform: null as unknown as WechatPlatform,
 
   data: {
     showMenu: true,
@@ -41,10 +42,6 @@ Page({
   },
 
   onMenuClick() {
-    this.toggleMenu()
-  },
-
-  toggleMenu() {
     const showMenu = !this.data.showMenu
     if (showMenu) {
       this.setData({ showMenu, showCanvas: false })
@@ -68,12 +65,14 @@ Page({
     (this.currDemo as Demo)?.dispose()
     this.currDemo = demo;
     this.setData({ currItem: i })
-    this.toggleMenu()
+    this.onMenuClick()
     this.switchingItem = false
   },
 
   initCanvas(canvas) {
     const platform = new WechatPlatform(canvas);
+
+    this.platform = platform;
     platform.enableDeviceOrientation('game')
     PLATFORM.set(platform);
 
@@ -102,6 +101,18 @@ Page({
     }
 
     render()
+  },
+
+  onTS(e) {
+    this.platform.dispatchTouchEvent(e);
+  },
+
+  onTM(e) {
+    this.platform.dispatchTouchEvent(e);
+  },
+
+  onTE(e) { 
+    this.platform.dispatchTouchEvent(e);
   },
 
   onUnload() {

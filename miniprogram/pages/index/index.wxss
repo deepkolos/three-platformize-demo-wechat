@@ -56,6 +56,8 @@
   flex-direction: column;
   transform: translateX(100%);
   transition: transform ease 0.33s;
+  will-change: trasform;
+  z-index: 2;
 }
 
 .menu-can.active {

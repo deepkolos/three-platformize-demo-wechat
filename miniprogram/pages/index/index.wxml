@@ -9,5 +9,5 @@
     <view class="menu-item {{currItem === idx ? 'active' : ''}}" wx:for="{{menuList}}" wx:for-index="idx" wx:for-item="item" data-i="{{idx}}"wx:key="idx" data-item="{{item}}" bindtap="onMenuItemClick">{{item}}</view>
   </view>
 
-  <canvas class="canvas {{showCanvas ? '' : 'hide'}}" id="gl" type="webgl"></canvas>
+  <canvas class="canvas {{showCanvas ? '' : 'hide'}}" id="gl" type="webgl" bindtouchstart="onTS" bindtouchmove="onTM" bindtouchend="onTE"></canvas>
 </view>
