@@ -13,6 +13,7 @@
   "license": "",
   "dependencies": {
     "three-platformize": "file:..\\three-platformize",
+    "three-platformize-demo": "file:..\\three-platformize-demo",
     "three-sprite-player": "^1.0.4"
   },
   "devDependencies": {

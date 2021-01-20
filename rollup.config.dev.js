@@ -10,7 +10,7 @@ export default [
       file: './miniprogram/pages/index/index.js'
     },
     plugins: [
-      resolve(),
+      resolve({ extensions: ['.ts', '.js'] }),
       sucrase({
         transforms: ['typescript']
       })
