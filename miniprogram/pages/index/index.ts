@@ -55,14 +55,13 @@ Page({
 
   async onMenuItemClick(e) {
     if (this.switchingItem) return
-    this.switchingItem = true
+    (this.currDemo as Demo)?.dispose();
+    this.switchingItem = true;
+    this.currDemo = null as unknown as Demo;
 
     const { i, item } = e.currentTarget.dataset;
-
     const demo = new (DEMO_MAP[item])(this.deps) as Demo;
     await demo.init();
-
-    (this.currDemo as Demo)?.dispose()
     this.currDemo = demo;
     this.setData({ currItem: i })
     this.onMenuClick()

@@ -51333,10 +51333,12 @@ class DemoDeviceOrientationControls extends Demo {
   }
 
   dispose() {
-    this.control.disconnect();
-    this.control.dispose();
+    this.deps.camera.position.set(0, 0, 0);
+    this.deps.camera.quaternion.set(0, 0, 0, 1);
     this.deps.scene.remove(this.mesh);
     this.deps.scene.remove(this.helper);
+    this.control.disconnect();
+    this.control.dispose();
     this.mesh.material.dispose();
     this.helper.material.dispose();
     this.mesh = null;
@@ -51398,14 +51400,13 @@ Page({
 
   async onMenuItemClick(e) {
     if (this.switchingItem) return
+    _optionalChain$2([(this.currDemo ), 'optionalAccess', _ => _.dispose, 'call', _2 => _2()]);
     this.switchingItem = true;
+    this.currDemo = null ;
 
     const { i, item } = e.currentTarget.dataset;
-
     const demo = new (DEMO_MAP[item])(this.deps) ;
     await demo.init();
-
-    _optionalChain$2([(this.currDemo ), 'optionalAccess', _ => _.dispose, 'call', _2 => _2()]);
     this.currDemo = demo;
     this.setData({ currItem: i });
     this.onMenuClick();
