@@ -2,9 +2,11 @@
 import { $requestAnimationFrame as requestAnimationFrame, $window as window, Clock, PerspectiveCamera, PLATFORM, Scene, sRGBEncoding, TextureLoader, WebGL1Renderer } from 'three-platformize'
 import { WechatPlatform } from 'three-platformize/src/WechatPlatform'
 import { GLTFLoader } from 'three-platformize/examples/jsm/loaders/GLTFLoader'
-import { DemoDeps, Demo, DemoGLTFLoader, DemoThreeSpritePlayer, DemoDeviceOrientationControls } from 'three-platformize-demo/src/index'
+import { DemoDeps, Demo, DemoGLTFLoader, DemoThreeSpritePlayer, DemoDeviceOrientationControls, DemoRGBELoader, DemoSVGLoader } from 'three-platformize-demo/src/index'
 
 const DEMO_MAP = {
+  SVGLoader: DemoSVGLoader,
+  RGBELoader: DemoRGBELoader,
   GLTFLoader: DemoGLTFLoader,
   ThreeSpritePlayer: DemoThreeSpritePlayer,
   DeviceOrientationControls: DemoDeviceOrientationControls
@@ -26,6 +28,8 @@ Page({
       'GLTFLoader',
       'ThreeSpritePlayer',
       'DeviceOrientationControls',
+      'RGBELoader',
+      'SVGLoader',
       'Raycaster',
       'Geometry'
     ]
@@ -39,33 +43,6 @@ Page({
     wx.createSelectorQuery().select('#gl').fields({ node: true, size: true }).exec((res) => {
       if (res[0]) this.initCanvas(res[0].node)
     })
-  },
-
-  onMenuClick() {
-    const showMenu = !this.data.showMenu
-    if (showMenu) {
-      this.setData({ showMenu, showCanvas: false })
-    } else {
-      this.setData({ showMenu })
-      setTimeout(() => {
-        this.setData({ showCanvas: true })
-      }, 330)
-    }
-  },
-
-  async onMenuItemClick(e) {
-    if (this.switchingItem) return
-    (this.currDemo as Demo)?.dispose();
-    this.switchingItem = true;
-    this.currDemo = null as unknown as Demo;
-
-    const { i, item } = e.currentTarget.dataset;
-    const demo = new (DEMO_MAP[item])(this.deps) as Demo;
-    await demo.init();
-    this.currDemo = demo;
-    this.setData({ currItem: i })
-    this.onMenuClick()
-    this.switchingItem = false
   },
 
   initCanvas(canvas) {
@@ -101,6 +78,33 @@ Page({
     render()
   },
 
+  onMenuClick() {
+    const showMenu = !this.data.showMenu
+    if (showMenu) {
+      this.setData({ showMenu, showCanvas: false })
+    } else {
+      this.setData({ showMenu })
+      setTimeout(() => {
+        this.setData({ showCanvas: true })
+      }, 330)
+    }
+  },
+
+  async onMenuItemClick(e) {
+    if (this.switchingItem) return
+    (this.currDemo as Demo)?.dispose();
+    this.switchingItem = true;
+    this.currDemo = null as unknown as Demo;
+
+    const { i, item } = e.currentTarget.dataset;
+    const demo = new (DEMO_MAP[item])(this.deps) as Demo;
+    await demo.init();
+    this.currDemo = demo;
+    this.setData({ currItem: i })
+    this.onMenuClick()
+    this.switchingItem = false
+  },
+
   onTS(e) {
     this.platform.dispatchTouchEvent(e);
   },
@@ -109,7 +113,7 @@ Page({
     this.platform.dispatchTouchEvent(e);
   },
 
-  onTE(e) { 
+  onTE(e) {
     this.platform.dispatchTouchEvent(e);
   },
 

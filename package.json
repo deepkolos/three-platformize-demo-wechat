@@ -5,7 +5,7 @@
   "scripts": {
     "compile": "./node_modules/typescript/bin/tsc",
     "tsc": "node ./node_modules/typescript/lib/tsc.js",
-    "dev": "rollup -w -c rollup.config.dev.js",
+    "dev": "rollup -w -c rollup.config.js",
     "build": "rollup -c rollup.config.js"
   },
   "keywords": [],
@@ -14,9 +14,11 @@
   "dependencies": {
     "three-platformize": "file:..\\three-platformize",
     "three-platformize-demo": "file:..\\three-platformize-demo",
-    "three-sprite-player": "^1.0.4"
+    "three-sprite-player": "^1.0.4",
+    "xmldom-qsa": "^1.0.3"
   },
   "devDependencies": {
+    "@rollup/plugin-commonjs": "^17.0.0",
     "@rollup/plugin-node-resolve": "^11.1.0",
     "@rollup/plugin-sucrase": "^3.1.0",
     "miniprogram-api-typings": "^2.8.3-1",

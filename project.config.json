@@ -32,7 +32,7 @@
     "compileHotReLoad": false,
     "useMultiFrameRuntime": true,
     "useApiHook": true,
-    "useApiHostProcess": false,
+    "useApiHostProcess": true,
     "babelSetting": {
       "ignore": [],
       "disablePlugins": [],
@@ -50,6 +50,6 @@
   },
   "simulatorType": "wechat",
   "simulatorPluginLibVersion": {},
-  "appid": "wxb4bb6b353b78f4d3",
+  "appid": "wx0b4fe52ef7a1a507",
   "condition": {}
 }

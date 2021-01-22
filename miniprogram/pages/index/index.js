@@ -85,6 +85,7 @@ const RGBFormat = 1022;
 const RGBAFormat = 1023;
 const LuminanceFormat = 1024;
 const LuminanceAlphaFormat = 1025;
+const RGBEFormat = RGBAFormat;
 const DepthFormat = 1026;
 const DepthStencilFormat = 1027;
 const RedFormat = 1028;
@@ -257,6 +258,7 @@ let $atob = null;
 let $Blob = null;
 let $window = null;
 let $document = null;
+let $DOMParser = null;
 let $XMLHttpRequest = null;
 let $OffscreenCanvas = null;
 let $HTMLCanvasElement = null;
@@ -279,10 +281,11 @@ class Platform {
     $OffscreenCanvas = globals.OffscreenCanvas;
     $HTMLCanvasElement = globals.HTMLCanvasElement;
     $createImageBitmap = globals.createImageBitmap;
+
+    $URL = $window.URL;
+    $DOMParser = $window.DOMParser;
     $requestAnimationFrame = $window.requestAnimationFrame;
     $window.cancelAnimationFrame;
-
-    $URL = globals.window.URL;
   }
 
   dispose() {
@@ -293,6 +296,7 @@ class Platform {
     $atob = null;
     $window = null;
     $document = null;
+    $DOMParser = null;
     $XMLHttpRequest = null;
     $OffscreenCanvas = null;
     $HTMLCanvasElement = null;
@@ -34413,7 +34417,7 @@ FileLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 					case 'document':
 
-						const parser = new DOMParser();
+						const parser = new $DOMParser();
 						response = parser.parseFromString( data, mimeType );
 
 						break;
@@ -43374,6 +43378,1036 @@ ImmediateRenderObject.prototype.constructor = ImmediateRenderObject;
 
 ImmediateRenderObject.prototype.isImmediateRenderObject = true;
 
+class GridHelper extends LineSegments {
+
+	constructor( size = 10, divisions = 10, color1 = 0x444444, color2 = 0x888888 ) {
+
+		color1 = new Color( color1 );
+		color2 = new Color( color2 );
+
+		const center = divisions / 2;
+		const step = size / divisions;
+		const halfSize = size / 2;
+
+		const vertices = [], colors = [];
+
+		for ( let i = 0, j = 0, k = - halfSize; i <= divisions; i ++, k += step ) {
+
+			vertices.push( - halfSize, 0, k, halfSize, 0, k );
+			vertices.push( k, 0, - halfSize, k, 0, halfSize );
+
+			const color = i === center ? color1 : color2;
+
+			color.toArray( colors, j ); j += 3;
+			color.toArray( colors, j ); j += 3;
+			color.toArray( colors, j ); j += 3;
+			color.toArray( colors, j ); j += 3;
+
+		}
+
+		const geometry = new BufferGeometry();
+		geometry.setAttribute( 'position', new Float32BufferAttribute( vertices, 3 ) );
+		geometry.setAttribute( 'color', new Float32BufferAttribute( colors, 3 ) );
+
+		const material = new LineBasicMaterial( { vertexColors: true, toneMapped: false } );
+
+		super( geometry, material );
+
+		this.type = 'GridHelper';
+
+	}
+
+}
+
+const _floatView = new Float32Array( 1 );
+const _int32View = new Int32Array( _floatView.buffer );
+
+const DataUtils = {
+
+	// Converts float32 to float16 (stored as uint16 value).
+
+	toHalfFloat: function ( val ) {
+
+		// Source: http://gamedev.stackexchange.com/questions/17326/conversion-of-a-number-from-single-precision-floating-point-representation-to-a/17410#17410
+
+		/* This method is faster than the OpenEXR implementation (very often
+		* used, eg. in Ogre), with the additional benefit of rounding, inspired
+		* by James Tursa?s half-precision code. */
+
+		_floatView[ 0 ] = val;
+		const x = _int32View[ 0 ];
+
+		let bits = ( x >> 16 ) & 0x8000; /* Get the sign */
+		let m = ( x >> 12 ) & 0x07ff; /* Keep one extra bit for rounding */
+		const e = ( x >> 23 ) & 0xff; /* Using int is faster here */
+
+		/* If zero, or denormal, or exponent underflows too much for a denormal
+			* half, return signed zero. */
+		if ( e < 103 ) return bits;
+
+		/* If NaN, return NaN. If Inf or exponent overflow, return Inf. */
+		if ( e > 142 ) {
+
+			bits |= 0x7c00;
+			/* If exponent was 0xff and one mantissa bit was set, it means NaN,
+						* not Inf, so make sure we set one mantissa bit too. */
+			bits |= ( ( e == 255 ) ? 0 : 1 ) && ( x & 0x007fffff );
+			return bits;
+
+		}
+
+		/* If exponent underflows but not too much, return a denormal */
+		if ( e < 113 ) {
+
+			m |= 0x0800;
+			/* Extra rounding may overflow and set mantissa to 0 and exponent
+				* to 1, which is OK. */
+			bits |= ( m >> ( 114 - e ) ) + ( ( m >> ( 113 - e ) ) & 1 );
+			return bits;
+
+		}
+
+		bits |= ( ( e - 112 ) << 10 ) | ( m >> 1 );
+		/* Extra rounding. An overflow will set mantissa to 0 and increment
+			* the exponent, which is OK. */
+		bits += m & 1;
+		return bits;
+
+	}
+
+};
+
+const LOD_MIN = 4;
+const LOD_MAX = 8;
+const SIZE_MAX = Math.pow( 2, LOD_MAX );
+
+// The standard deviations (radians) associated with the extra mips. These are
+// chosen to approximate a Trowbridge-Reitz distribution function times the
+// geometric shadowing function. These sigma values squared must match the
+// variance #defines in cube_uv_reflection_fragment.glsl.js.
+const EXTRA_LOD_SIGMA = [ 0.125, 0.215, 0.35, 0.446, 0.526, 0.582 ];
+
+const TOTAL_LODS = LOD_MAX - LOD_MIN + 1 + EXTRA_LOD_SIGMA.length;
+
+// The maximum length of the blur for loop. Smaller sigmas will use fewer
+// samples and exit early, but not recompile the shader.
+const MAX_SAMPLES = 20;
+
+const ENCODINGS = {
+	[ LinearEncoding ]: 0,
+	[ sRGBEncoding ]: 1,
+	[ RGBEEncoding ]: 2,
+	[ RGBM7Encoding ]: 3,
+	[ RGBM16Encoding ]: 4,
+	[ RGBDEncoding ]: 5,
+	[ GammaEncoding ]: 6
+};
+
+const _flatCamera = /*@__PURE__*/ new OrthographicCamera();
+const { _lodPlanes, _sizeLods, _sigmas } = /*@__PURE__*/ _createPlanes();
+const _clearColor = /*@__PURE__*/ new Color();
+let _oldTarget = null;
+
+// Golden Ratio
+const PHI = ( 1 + Math.sqrt( 5 ) ) / 2;
+const INV_PHI = 1 / PHI;
+
+// Vertices of a dodecahedron (except the opposites, which represent the
+// same axis), used as axis directions evenly spread on a sphere.
+const _axisDirections = [
+	/*@__PURE__*/ new Vector3( 1, 1, 1 ),
+	/*@__PURE__*/ new Vector3( - 1, 1, 1 ),
+	/*@__PURE__*/ new Vector3( 1, 1, - 1 ),
+	/*@__PURE__*/ new Vector3( - 1, 1, - 1 ),
+	/*@__PURE__*/ new Vector3( 0, PHI, INV_PHI ),
+	/*@__PURE__*/ new Vector3( 0, PHI, - INV_PHI ),
+	/*@__PURE__*/ new Vector3( INV_PHI, 0, PHI ),
+	/*@__PURE__*/ new Vector3( - INV_PHI, 0, PHI ),
+	/*@__PURE__*/ new Vector3( PHI, INV_PHI, 0 ),
+	/*@__PURE__*/ new Vector3( - PHI, INV_PHI, 0 ) ];
+
+/**
+ * This class generates a Prefiltered, Mipmapped Radiance Environment Map
+ * (PMREM) from a cubeMap environment texture. This allows different levels of
+ * blur to be quickly accessed based on material roughness. It is packed into a
+ * special CubeUV format that allows us to perform custom interpolation so that
+ * we can support nonlinear formats such as RGBE. Unlike a traditional mipmap
+ * chain, it only goes down to the LOD_MIN level (above), and then creates extra
+ * even more filtered 'mips' at the same LOD_MIN resolution, associated with
+ * higher roughness levels. In this way we maintain resolution to smoothly
+ * interpolate diffuse lighting while limiting sampling computation.
+ */
+
+class PMREMGenerator {
+
+	constructor( renderer ) {
+
+		this._renderer = renderer;
+		this._pingPongRenderTarget = null;
+
+		this._blurMaterial = _getBlurShader( MAX_SAMPLES );
+		this._equirectShader = null;
+		this._cubemapShader = null;
+
+		this._compileMaterial( this._blurMaterial );
+
+	}
+
+	/**
+	 * Generates a PMREM from a supplied Scene, which can be faster than using an
+	 * image if networking bandwidth is low. Optional sigma specifies a blur radius
+	 * in radians to be applied to the scene before PMREM generation. Optional near
+	 * and far planes ensure the scene is rendered in its entirety (the cubeCamera
+	 * is placed at the origin).
+	 */
+	fromScene( scene, sigma = 0, near = 0.1, far = 100 ) {
+
+		_oldTarget = this._renderer.getRenderTarget();
+		const cubeUVRenderTarget = this._allocateTargets();
+
+		this._sceneToCubeUV( scene, near, far, cubeUVRenderTarget );
+		if ( sigma > 0 ) {
+
+			this._blur( cubeUVRenderTarget, 0, 0, sigma );
+
+		}
+
+		this._applyPMREM( cubeUVRenderTarget );
+		this._cleanup( cubeUVRenderTarget );
+
+		return cubeUVRenderTarget;
+
+	}
+
+	/**
+	 * Generates a PMREM from an equirectangular texture, which can be either LDR
+	 * (RGBFormat) or HDR (RGBEFormat). The ideal input image size is 1k (1024 x 512),
+	 * as this matches best with the 256 x 256 cubemap output.
+	 */
+	fromEquirectangular( equirectangular ) {
+
+		return this._fromTexture( equirectangular );
+
+	}
+
+	/**
+	 * Generates a PMREM from an cubemap texture, which can be either LDR
+	 * (RGBFormat) or HDR (RGBEFormat). The ideal input cube size is 256 x 256,
+	 * as this matches best with the 256 x 256 cubemap output.
+	 */
+	fromCubemap( cubemap ) {
+
+		return this._fromTexture( cubemap );
+
+	}
+
+	/**
+	 * Pre-compiles the cubemap shader. You can get faster start-up by invoking this method during
+	 * your texture's network fetch for increased concurrency.
+	 */
+	compileCubemapShader() {
+
+		if ( this._cubemapShader === null ) {
+
+			this._cubemapShader = _getCubemapShader();
+			this._compileMaterial( this._cubemapShader );
+
+		}
+
+	}
+
+	/**
+	 * Pre-compiles the equirectangular shader. You can get faster start-up by invoking this method during
+	 * your texture's network fetch for increased concurrency.
+	 */
+	compileEquirectangularShader() {
+
+		if ( this._equirectShader === null ) {
+
+			this._equirectShader = _getEquirectShader();
+			this._compileMaterial( this._equirectShader );
+
+		}
+
+	}
+
+	/**
+	 * Disposes of the PMREMGenerator's internal memory. Note that PMREMGenerator is a static class,
+	 * so you should not need more than one PMREMGenerator object. If you do, calling dispose() on
+	 * one of them will cause any others to also become unusable.
+	 */
+	dispose() {
+
+		this._blurMaterial.dispose();
+
+		if ( this._cubemapShader !== null ) this._cubemapShader.dispose();
+		if ( this._equirectShader !== null ) this._equirectShader.dispose();
+
+		for ( let i = 0; i < _lodPlanes.length; i ++ ) {
+
+			_lodPlanes[ i ].dispose();
+
+		}
+
+	}
+
+	// private interface
+
+	_cleanup( outputTarget ) {
+
+		this._pingPongRenderTarget.dispose();
+		this._renderer.setRenderTarget( _oldTarget );
+		outputTarget.scissorTest = false;
+		_setViewport( outputTarget, 0, 0, outputTarget.width, outputTarget.height );
+
+	}
+
+	_fromTexture( texture ) {
+
+		_oldTarget = this._renderer.getRenderTarget();
+		const cubeUVRenderTarget = this._allocateTargets( texture );
+		this._textureToCubeUV( texture, cubeUVRenderTarget );
+		this._applyPMREM( cubeUVRenderTarget );
+		this._cleanup( cubeUVRenderTarget );
+
+		return cubeUVRenderTarget;
+
+	}
+
+	_allocateTargets( texture ) { // warning: null texture is valid
+
+		const params = {
+			magFilter: NearestFilter,
+			minFilter: NearestFilter,
+			generateMipmaps: false,
+			type: UnsignedByteType,
+			format: RGBEFormat,
+			encoding: _isLDR( texture ) ? texture.encoding : RGBEEncoding,
+			depthBuffer: false
+		};
+
+		const cubeUVRenderTarget = _createRenderTarget( params );
+		cubeUVRenderTarget.depthBuffer = texture ? false : true;
+		this._pingPongRenderTarget = _createRenderTarget( params );
+		return cubeUVRenderTarget;
+
+	}
+
+	_compileMaterial( material ) {
+
+		const tmpMesh = new Mesh( _lodPlanes[ 0 ], material );
+		this._renderer.compile( tmpMesh, _flatCamera );
+
+	}
+
+	_sceneToCubeUV( scene, near, far, cubeUVRenderTarget ) {
+
+		const fov = 90;
+		const aspect = 1;
+		const cubeCamera = new PerspectiveCamera( fov, aspect, near, far );
+		const upSign = [ 1, - 1, 1, 1, 1, 1 ];
+		const forwardSign = [ 1, 1, 1, - 1, - 1, - 1 ];
+		const renderer = this._renderer;
+
+		const outputEncoding = renderer.outputEncoding;
+		const toneMapping = renderer.toneMapping;
+		renderer.getClearColor( _clearColor );
+		const clearAlpha = renderer.getClearAlpha();
+
+		renderer.toneMapping = NoToneMapping;
+		renderer.outputEncoding = LinearEncoding;
+
+		let background = scene.background;
+		if ( background && background.isColor ) {
+
+			background.convertSRGBToLinear();
+			// Convert linear to RGBE
+			const maxComponent = Math.max( background.r, background.g, background.b );
+			const fExp = Math.min( Math.max( Math.ceil( Math.log2( maxComponent ) ), - 128.0 ), 127.0 );
+			background = background.multiplyScalar( Math.pow( 2.0, - fExp ) );
+			const alpha = ( fExp + 128.0 ) / 255.0;
+			renderer.setClearColor( background, alpha );
+			scene.background = null;
+
+		}
+
+		for ( let i = 0; i < 6; i ++ ) {
+
+			const col = i % 3;
+			if ( col == 0 ) {
+
+				cubeCamera.up.set( 0, upSign[ i ], 0 );
+				cubeCamera.lookAt( forwardSign[ i ], 0, 0 );
+
+			} else if ( col == 1 ) {
+
+				cubeCamera.up.set( 0, 0, upSign[ i ] );
+				cubeCamera.lookAt( 0, forwardSign[ i ], 0 );
+
+			} else {
+
+				cubeCamera.up.set( 0, upSign[ i ], 0 );
+				cubeCamera.lookAt( 0, 0, forwardSign[ i ] );
+
+			}
+
+			_setViewport( cubeUVRenderTarget,
+				col * SIZE_MAX, i > 2 ? SIZE_MAX : 0, SIZE_MAX, SIZE_MAX );
+			renderer.setRenderTarget( cubeUVRenderTarget );
+			renderer.render( scene, cubeCamera );
+
+		}
+
+		renderer.toneMapping = toneMapping;
+		renderer.outputEncoding = outputEncoding;
+		renderer.setClearColor( _clearColor, clearAlpha );
+
+	}
+
+	_textureToCubeUV( texture, cubeUVRenderTarget ) {
+
+		const renderer = this._renderer;
+
+		if ( texture.isCubeTexture ) {
+
+			if ( this._cubemapShader == null ) {
+
+				this._cubemapShader = _getCubemapShader();
+
+			}
+
+		} else {
+
+			if ( this._equirectShader == null ) {
+
+				this._equirectShader = _getEquirectShader();
+
+			}
+
+		}
+
+		const material = texture.isCubeTexture ? this._cubemapShader : this._equirectShader;
+		const mesh = new Mesh( _lodPlanes[ 0 ], material );
+
+		const uniforms = material.uniforms;
+
+		uniforms[ 'envMap' ].value = texture;
+
+		if ( ! texture.isCubeTexture ) {
+
+			uniforms[ 'texelSize' ].value.set( 1.0 / texture.image.width, 1.0 / texture.image.height );
+
+		}
+
+		uniforms[ 'inputEncoding' ].value = ENCODINGS[ texture.encoding ];
+		uniforms[ 'outputEncoding' ].value = ENCODINGS[ cubeUVRenderTarget.texture.encoding ];
+
+		_setViewport( cubeUVRenderTarget, 0, 0, 3 * SIZE_MAX, 2 * SIZE_MAX );
+
+		renderer.setRenderTarget( cubeUVRenderTarget );
+		renderer.render( mesh, _flatCamera );
+
+	}
+
+	_applyPMREM( cubeUVRenderTarget ) {
+
+		const renderer = this._renderer;
+		const autoClear = renderer.autoClear;
+		renderer.autoClear = false;
+
+		for ( let i = 1; i < TOTAL_LODS; i ++ ) {
+
+			const sigma = Math.sqrt( _sigmas[ i ] * _sigmas[ i ] - _sigmas[ i - 1 ] * _sigmas[ i - 1 ] );
+
+			const poleAxis = _axisDirections[ ( i - 1 ) % _axisDirections.length ];
+
+			this._blur( cubeUVRenderTarget, i - 1, i, sigma, poleAxis );
+
+		}
+
+		renderer.autoClear = autoClear;
+
+	}
+
+	/**
+	 * This is a two-pass Gaussian blur for a cubemap. Normally this is done
+	 * vertically and horizontally, but this breaks down on a cube. Here we apply
+	 * the blur latitudinally (around the poles), and then longitudinally (towards
+	 * the poles) to approximate the orthogonally-separable blur. It is least
+	 * accurate at the poles, but still does a decent job.
+	 */
+	_blur( cubeUVRenderTarget, lodIn, lodOut, sigma, poleAxis ) {
+
+		const pingPongRenderTarget = this._pingPongRenderTarget;
+
+		this._halfBlur(
+			cubeUVRenderTarget,
+			pingPongRenderTarget,
+			lodIn,
+			lodOut,
+			sigma,
+			'latitudinal',
+			poleAxis );
+
+		this._halfBlur(
+			pingPongRenderTarget,
+			cubeUVRenderTarget,
+			lodOut,
+			lodOut,
+			sigma,
+			'longitudinal',
+			poleAxis );
+
+	}
+
+	_halfBlur( targetIn, targetOut, lodIn, lodOut, sigmaRadians, direction, poleAxis ) {
+
+		const renderer = this._renderer;
+		const blurMaterial = this._blurMaterial;
+
+		if ( direction !== 'latitudinal' && direction !== 'longitudinal' ) {
+
+			console.error(
+				'blur direction must be either latitudinal or longitudinal!' );
+
+		}
+
+		// Number of standard deviations at which to cut off the discrete approximation.
+		const STANDARD_DEVIATIONS = 3;
+
+		const blurMesh = new Mesh( _lodPlanes[ lodOut ], blurMaterial );
+		const blurUniforms = blurMaterial.uniforms;
+
+		const pixels = _sizeLods[ lodIn ] - 1;
+		const radiansPerPixel = isFinite( sigmaRadians ) ? Math.PI / ( 2 * pixels ) : 2 * Math.PI / ( 2 * MAX_SAMPLES - 1 );
+		const sigmaPixels = sigmaRadians / radiansPerPixel;
+		const samples = isFinite( sigmaRadians ) ? 1 + Math.floor( STANDARD_DEVIATIONS * sigmaPixels ) : MAX_SAMPLES;
+
+		if ( samples > MAX_SAMPLES ) {
+
+			console.warn( `sigmaRadians, ${
+				sigmaRadians}, is too large and will clip, as it requested ${
+				samples} samples when the maximum is set to ${MAX_SAMPLES}` );
+
+		}
+
+		const weights = [];
+		let sum = 0;
+
+		for ( let i = 0; i < MAX_SAMPLES; ++ i ) {
+
+			const x = i / sigmaPixels;
+			const weight = Math.exp( - x * x / 2 );
+			weights.push( weight );
+
+			if ( i == 0 ) {
+
+				sum += weight;
+
+			} else if ( i < samples ) {
+
+				sum += 2 * weight;
+
+			}
+
+		}
+
+		for ( let i = 0; i < weights.length; i ++ ) {
+
+			weights[ i ] = weights[ i ] / sum;
+
+		}
+
+		blurUniforms[ 'envMap' ].value = targetIn.texture;
+		blurUniforms[ 'samples' ].value = samples;
+		blurUniforms[ 'weights' ].value = weights;
+		blurUniforms[ 'latitudinal' ].value = direction === 'latitudinal';
+
+		if ( poleAxis ) {
+
+			blurUniforms[ 'poleAxis' ].value = poleAxis;
+
+		}
+
+		blurUniforms[ 'dTheta' ].value = radiansPerPixel;
+		blurUniforms[ 'mipInt' ].value = LOD_MAX - lodIn;
+		blurUniforms[ 'inputEncoding' ].value = ENCODINGS[ targetIn.texture.encoding ];
+		blurUniforms[ 'outputEncoding' ].value = ENCODINGS[ targetIn.texture.encoding ];
+
+		const outputSize = _sizeLods[ lodOut ];
+		const x = 3 * Math.max( 0, SIZE_MAX - 2 * outputSize );
+		const y = ( lodOut === 0 ? 0 : 2 * SIZE_MAX ) + 2 * outputSize * ( lodOut > LOD_MAX - LOD_MIN ? lodOut - LOD_MAX + LOD_MIN : 0 );
+
+		_setViewport( targetOut, x, y, 3 * outputSize, 2 * outputSize );
+		renderer.setRenderTarget( targetOut );
+		renderer.render( blurMesh, _flatCamera );
+
+	}
+
+}
+
+function _isLDR( texture ) {
+
+	if ( texture === undefined || texture.type !== UnsignedByteType ) return false;
+
+	return texture.encoding === LinearEncoding || texture.encoding === sRGBEncoding || texture.encoding === GammaEncoding;
+
+}
+
+function _createPlanes() {
+
+	const _lodPlanes = [];
+	const _sizeLods = [];
+	const _sigmas = [];
+
+	let lod = LOD_MAX;
+
+	for ( let i = 0; i < TOTAL_LODS; i ++ ) {
+
+		const sizeLod = Math.pow( 2, lod );
+		_sizeLods.push( sizeLod );
+		let sigma = 1.0 / sizeLod;
+
+		if ( i > LOD_MAX - LOD_MIN ) {
+
+			sigma = EXTRA_LOD_SIGMA[ i - LOD_MAX + LOD_MIN - 1 ];
+
+		} else if ( i == 0 ) {
+
+			sigma = 0;
+
+		}
+
+		_sigmas.push( sigma );
+
+		const texelSize = 1.0 / ( sizeLod - 1 );
+		const min = - texelSize / 2;
+		const max = 1 + texelSize / 2;
+		const uv1 = [ min, min, max, min, max, max, min, min, max, max, min, max ];
+
+		const cubeFaces = 6;
+		const vertices = 6;
+		const positionSize = 3;
+		const uvSize = 2;
+		const faceIndexSize = 1;
+
+		const position = new Float32Array( positionSize * vertices * cubeFaces );
+		const uv = new Float32Array( uvSize * vertices * cubeFaces );
+		const faceIndex = new Float32Array( faceIndexSize * vertices * cubeFaces );
+
+		for ( let face = 0; face < cubeFaces; face ++ ) {
+
+			const x = ( face % 3 ) * 2 / 3 - 1;
+			const y = face > 2 ? 0 : - 1;
+			const coordinates = [
+				x, y, 0,
+				x + 2 / 3, y, 0,
+				x + 2 / 3, y + 1, 0,
+				x, y, 0,
+				x + 2 / 3, y + 1, 0,
+				x, y + 1, 0
+			];
+			position.set( coordinates, positionSize * vertices * face );
+			uv.set( uv1, uvSize * vertices * face );
+			const fill = [ face, face, face, face, face, face ];
+			faceIndex.set( fill, faceIndexSize * vertices * face );
+
+		}
+
+		const planes = new BufferGeometry();
+		planes.setAttribute( 'position', new BufferAttribute( position, positionSize ) );
+		planes.setAttribute( 'uv', new BufferAttribute( uv, uvSize ) );
+		planes.setAttribute( 'faceIndex', new BufferAttribute( faceIndex, faceIndexSize ) );
+		_lodPlanes.push( planes );
+
+		if ( lod > LOD_MIN ) {
+
+			lod --;
+
+		}
+
+	}
+
+	return { _lodPlanes, _sizeLods, _sigmas };
+
+}
+
+function _createRenderTarget( params ) {
+
+	const cubeUVRenderTarget = new WebGLRenderTarget( 3 * SIZE_MAX, 3 * SIZE_MAX, params );
+	cubeUVRenderTarget.texture.mapping = CubeUVReflectionMapping;
+	cubeUVRenderTarget.texture.name = 'PMREM.cubeUv';
+	cubeUVRenderTarget.scissorTest = true;
+	return cubeUVRenderTarget;
+
+}
+
+function _setViewport( target, x, y, width, height ) {
+
+	target.viewport.set( x, y, width, height );
+	target.scissor.set( x, y, width, height );
+
+}
+
+function _getBlurShader( maxSamples ) {
+
+	const weights = new Float32Array( maxSamples );
+	const poleAxis = new Vector3( 0, 1, 0 );
+	const shaderMaterial = new RawShaderMaterial( {
+
+		name: 'SphericalGaussianBlur',
+
+		defines: { 'n': maxSamples },
+
+		uniforms: {
+			'envMap': { value: null },
+			'samples': { value: 1 },
+			'weights': { value: weights },
+			'latitudinal': { value: false },
+			'dTheta': { value: 0 },
+			'mipInt': { value: 0 },
+			'poleAxis': { value: poleAxis },
+			'inputEncoding': { value: ENCODINGS[ LinearEncoding ] },
+			'outputEncoding': { value: ENCODINGS[ LinearEncoding ] }
+		},
+
+		vertexShader: _getCommonVertexShader(),
+
+		fragmentShader: /* glsl */`
+
+			precision mediump float;
+			precision mediump int;
+
+			varying vec3 vOutputDirection;
+
+			uniform sampler2D envMap;
+			uniform int samples;
+			uniform float weights[ n ];
+			uniform bool latitudinal;
+			uniform float dTheta;
+			uniform float mipInt;
+			uniform vec3 poleAxis;
+
+			${ _getEncodings() }
+
+			#define ENVMAP_TYPE_CUBE_UV
+			#include <cube_uv_reflection_fragment>
+
+			vec3 getSample( float theta, vec3 axis ) {
+
+				float cosTheta = cos( theta );
+				// Rodrigues' axis-angle rotation
+				vec3 sampleDirection = vOutputDirection * cosTheta
+					+ cross( axis, vOutputDirection ) * sin( theta )
+					+ axis * dot( axis, vOutputDirection ) * ( 1.0 - cosTheta );
+
+				return bilinearCubeUV( envMap, sampleDirection, mipInt );
+
+			}
+
+			void main() {
+
+				vec3 axis = latitudinal ? poleAxis : cross( poleAxis, vOutputDirection );
+
+				if ( all( equal( axis, vec3( 0.0 ) ) ) ) {
+
+					axis = vec3( vOutputDirection.z, 0.0, - vOutputDirection.x );
+
+				}
+
+				axis = normalize( axis );
+
+				gl_FragColor = vec4( 0.0, 0.0, 0.0, 1.0 );
+				gl_FragColor.rgb += weights[ 0 ] * getSample( 0.0, axis );
+
+				for ( int i = 1; i < n; i++ ) {
+
+					if ( i >= samples ) {
+
+						break;
+
+					}
+
+					float theta = dTheta * float( i );
+					gl_FragColor.rgb += weights[ i ] * getSample( -1.0 * theta, axis );
+					gl_FragColor.rgb += weights[ i ] * getSample( theta, axis );
+
+				}
+
+				gl_FragColor = linearToOutputTexel( gl_FragColor );
+
+			}
+		`,
+
+		blending: NoBlending,
+		depthTest: false,
+		depthWrite: false
+
+	} );
+
+	return shaderMaterial;
+
+}
+
+function _getEquirectShader() {
+
+	const texelSize = new Vector2( 1, 1 );
+	const shaderMaterial = new RawShaderMaterial( {
+
+		name: 'EquirectangularToCubeUV',
+
+		uniforms: {
+			'envMap': { value: null },
+			'texelSize': { value: texelSize },
+			'inputEncoding': { value: ENCODINGS[ LinearEncoding ] },
+			'outputEncoding': { value: ENCODINGS[ LinearEncoding ] }
+		},
+
+		vertexShader: _getCommonVertexShader(),
+
+		fragmentShader: /* glsl */`
+
+			precision mediump float;
+			precision mediump int;
+
+			varying vec3 vOutputDirection;
+
+			uniform sampler2D envMap;
+			uniform vec2 texelSize;
+
+			${ _getEncodings() }
+
+			#include <common>
+
+			void main() {
+
+				gl_FragColor = vec4( 0.0, 0.0, 0.0, 1.0 );
+
+				vec3 outputDirection = normalize( vOutputDirection );
+				vec2 uv = equirectUv( outputDirection );
+
+				vec2 f = fract( uv / texelSize - 0.5 );
+				uv -= f * texelSize;
+				vec3 tl = envMapTexelToLinear( texture2D ( envMap, uv ) ).rgb;
+				uv.x += texelSize.x;
+				vec3 tr = envMapTexelToLinear( texture2D ( envMap, uv ) ).rgb;
+				uv.y += texelSize.y;
+				vec3 br = envMapTexelToLinear( texture2D ( envMap, uv ) ).rgb;
+				uv.x -= texelSize.x;
+				vec3 bl = envMapTexelToLinear( texture2D ( envMap, uv ) ).rgb;
+
+				vec3 tm = mix( tl, tr, f.x );
+				vec3 bm = mix( bl, br, f.x );
+				gl_FragColor.rgb = mix( tm, bm, f.y );
+
+				gl_FragColor = linearToOutputTexel( gl_FragColor );
+
+			}
+		`,
+
+		blending: NoBlending,
+		depthTest: false,
+		depthWrite: false
+
+	} );
+
+	return shaderMaterial;
+
+}
+
+function _getCubemapShader() {
+
+	const shaderMaterial = new RawShaderMaterial( {
+
+		name: 'CubemapToCubeUV',
+
+		uniforms: {
+			'envMap': { value: null },
+			'inputEncoding': { value: ENCODINGS[ LinearEncoding ] },
+			'outputEncoding': { value: ENCODINGS[ LinearEncoding ] }
+		},
+
+		vertexShader: _getCommonVertexShader(),
+
+		fragmentShader: /* glsl */`
+
+			precision mediump float;
+			precision mediump int;
+
+			varying vec3 vOutputDirection;
+
+			uniform samplerCube envMap;
+
+			${ _getEncodings() }
+
+			void main() {
+
+				gl_FragColor = vec4( 0.0, 0.0, 0.0, 1.0 );
+				gl_FragColor.rgb = envMapTexelToLinear( textureCube( envMap, vec3( - vOutputDirection.x, vOutputDirection.yz ) ) ).rgb;
+				gl_FragColor = linearToOutputTexel( gl_FragColor );
+
+			}
+		`,
+
+		blending: NoBlending,
+		depthTest: false,
+		depthWrite: false
+
+	} );
+
+	return shaderMaterial;
+
+}
+
+function _getCommonVertexShader() {
+
+	return /* glsl */`
+
+		precision mediump float;
+		precision mediump int;
+
+		attribute vec3 position;
+		attribute vec2 uv;
+		attribute float faceIndex;
+
+		varying vec3 vOutputDirection;
+
+		// RH coordinate system; PMREM face-indexing convention
+		vec3 getDirection( vec2 uv, float face ) {
+
+			uv = 2.0 * uv - 1.0;
+
+			vec3 direction = vec3( uv, 1.0 );
+
+			if ( face == 0.0 ) {
+
+				direction = direction.zyx; // ( 1, v, u ) pos x
+
+			} else if ( face == 1.0 ) {
+
+				direction = direction.xzy;
+				direction.xz *= -1.0; // ( -u, 1, -v ) pos y
+
+			} else if ( face == 2.0 ) {
+
+				direction.x *= -1.0; // ( -u, v, 1 ) pos z
+
+			} else if ( face == 3.0 ) {
+
+				direction = direction.zyx;
+				direction.xz *= -1.0; // ( -1, v, -u ) neg x
+
+			} else if ( face == 4.0 ) {
+
+				direction = direction.xzy;
+				direction.xy *= -1.0; // ( -u, -1, v ) neg y
+
+			} else if ( face == 5.0 ) {
+
+				direction.z *= -1.0; // ( u, v, -1 ) neg z
+
+			}
+
+			return direction;
+
+		}
+
+		void main() {
+
+			vOutputDirection = getDirection( uv, faceIndex );
+			gl_Position = vec4( position, 1.0 );
+
+		}
+	`;
+
+}
+
+function _getEncodings() {
+
+	return /* glsl */`
+
+		uniform int inputEncoding;
+		uniform int outputEncoding;
+
+		#include <encodings_pars_fragment>
+
+		vec4 inputTexelToLinear( vec4 value ) {
+
+			if ( inputEncoding == 0 ) {
+
+				return value;
+
+			} else if ( inputEncoding == 1 ) {
+
+				return sRGBToLinear( value );
+
+			} else if ( inputEncoding == 2 ) {
+
+				return RGBEToLinear( value );
+
+			} else if ( inputEncoding == 3 ) {
+
+				return RGBMToLinear( value, 7.0 );
+
+			} else if ( inputEncoding == 4 ) {
+
+				return RGBMToLinear( value, 16.0 );
+
+			} else if ( inputEncoding == 5 ) {
+
+				return RGBDToLinear( value, 256.0 );
+
+			} else {
+
+				return GammaToLinear( value, 2.2 );
+
+			}
+
+		}
+
+		vec4 linearToOutputTexel( vec4 value ) {
+
+			if ( outputEncoding == 0 ) {
+
+				return value;
+
+			} else if ( outputEncoding == 1 ) {
+
+				return LinearTosRGB( value );
+
+			} else if ( outputEncoding == 2 ) {
+
+				return LinearToRGBE( value );
+
+			} else if ( outputEncoding == 3 ) {
+
+				return LinearToRGBM( value, 7.0 );
+
+			} else if ( outputEncoding == 4 ) {
+
+				return LinearToRGBM( value, 16.0 );
+
+			} else if ( outputEncoding == 5 ) {
+
+				return LinearToRGBD( value, 256.0 );
+
+			} else {
+
+				return LinearToGamma( value, 2.2 );
+
+			}
+
+		}
+
+		vec4 envMapTexelToLinear( vec4 color ) {
+
+			return inputTexelToLinear( color );
+
+		}
+	`;
+
+}
+
 //
 
 Curve.create = function ( construct, getPoint ) {
@@ -43478,6 +44512,12 @@ Object.assign( Spline.prototype, {
 	}
 
 } );
+
+GridHelper.prototype.setColors = function () {
+
+	console.error( 'THREE.GridHelper: setColors() has been deprecated, pass them in the constructor instead.' );
+
+};
 
 //
 
@@ -45680,6 +46720,217 @@ function copyProperties(target, source) {
   }
 }
 
+/**
+ * Module dependencies.
+ */
+
+/**
+ * Expose `parse`.
+ */
+
+/**
+ * Parse the given string of `xml`.
+ *
+ * @param {String} xml
+ * @return {Object}
+ * @api public
+ */
+
+function parse(xml) {
+  xml = xml.trim();
+
+  // strip comments
+  xml = xml.replace(/<!--[\s\S]*?-->/g, '');
+
+  return document();
+
+  /**
+   * XML document.
+   */
+
+  function document() {
+    return {
+      declaration: declaration(),
+      root: tag(),
+    };
+  }
+
+  /**
+   * Declaration.
+   */
+
+  function declaration() {
+    const m = match(/^<\?xml\s*/);
+    if (!m) return;
+
+    // tag
+    const node = {
+      attributes: {},
+    };
+
+    // attributes
+    while (!(eos() || is('?>'))) {
+      const attr = attribute();
+      if (!attr) return node;
+      node.attributes[attr.name] = attr.value;
+    }
+
+    match(/\?>\s*/);
+
+    // remove DOCTYPE
+    // <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" 
+    //      "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+    match(/<!DOCTYPE[^>]*>\s/);
+
+    return node;
+  }
+
+  /**
+   * Tag.
+   */
+
+  function tag() {
+    const m = match(/^<([\w-:.]+)\s*/);
+    if (!m) return;
+
+    // name
+    const node = {
+      name: m[1],
+      attributes: {},
+      children: [],
+    };
+
+    // attributes
+    while (!(eos() || is('>') || is('?>') || is('/>'))) {
+      const attr = attribute();
+      if (!attr) return node;
+      node.attributes[attr.name] = attr.value;
+    }
+
+    // self closing tag
+    if (match(/^\s*\/>\s*/)) {
+      return node;
+    }
+
+    match(/\??>\s*/);
+
+    // @ts-ignore content
+    node.content = content();
+
+    // children
+    let child;
+    while ((child = tag())) {
+      node.children.push(child);
+    }
+
+    // closing
+    match(/^<\/[\w-:.]+>\s*/);
+
+    return node;
+  }
+
+  /**
+   * Text content.
+   */
+
+  function content() {
+    const m = match(/^([^<]*)/);
+    if (m) return m[1];
+    return '';
+  }
+
+  /**
+   * Attribute.
+   */
+
+  function attribute() {
+    const m = match(/([\w:-]+)\s*=\s*("[^"]*"|'[^']*'|\w+)\s*/);
+    if (!m) return;
+    return { name: m[1], value: strip(m[2]) };
+  }
+
+  /**
+   * Strip quotes from `val`.
+   */
+
+  function strip(val) {
+    return val.replace(/^['"]|['"]$/g, '');
+  }
+
+  /**
+   * Match `re` and advance the string.
+   */
+
+  function match(re) {
+    const m = xml.match(re);
+    if (!m) return;
+    xml = xml.slice(m[0].length);
+    return m;
+  }
+
+  /**
+   * End-of-source.
+   */
+
+  function eos() {
+    return xml.length == 0;
+  }
+
+  /**
+   * Check for `prefix`.
+   */
+
+  function is(prefix) {
+    return xml.indexOf(prefix) == 0;
+  }
+}
+
+function walkTree(node, processer) {
+  processer(node);
+  node.children.forEach(i => walkTree(i, processer));
+}
+
+class $DOMParser$1 {
+  parseFromString(str) {
+    const xml = parse(str);
+
+    const nodeBase = {
+      hasAttribute(key) {
+        return this.attributes[key] !== undefined;
+      },
+      getAttribute(key) {
+        return this.attributes[key];
+      },
+    };
+
+    // patch xml
+    walkTree(xml.root, node => {
+      node.nodeType = 1;
+      node.nodeName = node.name;
+      node.style = new Proxy(
+        (node.attributes.style || '').split(';').reduce((acc, curr) => {
+          if (curr) {
+            let [key, value] = curr.split(':');
+            acc[key.trim()] = value.trim();
+          }
+          return acc;
+        }, {}),
+        {
+          get(target, key) {
+            return target[key] || '';
+          },
+        },
+      );
+      node.childNodes = node.children;
+      node.__proto__ = nodeBase;
+    });
+
+    return {
+      documentElement: xml.root,
+    };
+  }
+}
+
 function OffscreenCanvas() {
   return wx.createOffscreenCanvas();
 }
@@ -45695,7 +46946,6 @@ class WechatPlatform {
     this.document = {
       createElementNS(_, type) {
         if (type === 'canvas') return canvas;
-
         if (type === 'img') return canvas.createImage();
       },
     };
@@ -45704,8 +46954,9 @@ class WechatPlatform {
       innerWidth: systemInfo.windowWidth,
       innerHeight: systemInfo.windowHeight,
       devicePixelRatio: systemInfo.pixelRatio,
-      AudioContext: function () {},
+
       URL: new $URL$1(),
+      AudioContext: function () {},
       requestAnimationFrame: this.canvas.requestAnimationFrame,
       cancelAnimationFrame: this.canvas.cancelAnimationFrame,
       DeviceOrientationEvent: {
@@ -45713,6 +46964,7 @@ class WechatPlatform {
           return Promise.resolve('granted');
         },
       },
+      DOMParser: $DOMParser$1,
     };
 
     [this.canvas, this.document, this.window].forEach(i => {
@@ -50907,7 +52159,2933 @@ var MapControls = function ( object, domElement ) {
 MapControls.prototype = Object.create( EventDispatcher.prototype );
 MapControls.prototype.constructor = MapControls;
 
+var SVGLoader = function ( manager ) {
+
+	Loader.call( this, manager );
+
+	// Default dots per inch
+	this.defaultDPI = 90;
+
+	// Accepted units: 'mm', 'cm', 'in', 'pt', 'pc', 'px'
+	this.defaultUnit = 'px';
+
+};
+
+SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
+
+	constructor: SVGLoader,
+
+	load: function ( url, onLoad, onProgress, onError ) {
+
+		var scope = this;
+
+		var loader = new FileLoader( scope.manager );
+		loader.setPath( scope.path );
+		loader.setRequestHeader( scope.requestHeader );
+		loader.setWithCredentials( scope.withCredentials );
+		loader.load( url, function ( text ) {
+
+			try {
+
+				onLoad( scope.parse( text ) );
+
+			} catch ( e ) {
+
+				if ( onError ) {
+
+					onError( e );
+
+				} else {
+
+					console.error( e );
+
+				}
+
+				scope.manager.itemError( url );
+
+			}
+
+		}, onProgress, onError );
+
+	},
+
+	parse: function ( text ) {
+
+		var scope = this;
+
+		function parseNode( node, style ) {
+
+			if ( node.nodeType !== 1 ) return;
+
+			var transform = getNodeTransform( node );
+
+			var traverseChildNodes = true;
+
+			var path = null;
+
+			switch ( node.nodeName ) {
+
+				case 'svg':
+					break;
+
+				case 'style':
+					parseCSSStylesheet( node );
+					break;
+
+				case 'g':
+					style = parseStyle( node, style );
+					break;
+
+				case 'path':
+					style = parseStyle( node, style );
+					if ( node.hasAttribute( 'd' ) ) path = parsePathNode( node );
+					break;
+
+				case 'rect':
+					style = parseStyle( node, style );
+					path = parseRectNode( node );
+					break;
+
+				case 'polygon':
+					style = parseStyle( node, style );
+					path = parsePolygonNode( node );
+					break;
+
+				case 'polyline':
+					style = parseStyle( node, style );
+					path = parsePolylineNode( node );
+					break;
+
+				case 'circle':
+					style = parseStyle( node, style );
+					path = parseCircleNode( node );
+					break;
+
+				case 'ellipse':
+					style = parseStyle( node, style );
+					path = parseEllipseNode( node );
+					break;
+
+				case 'line':
+					style = parseStyle( node, style );
+					path = parseLineNode( node );
+					break;
+
+				case 'defs':
+					traverseChildNodes = false;
+					break;
+
+				case 'use':
+					style = parseStyle( node, style );
+					var usedNodeId = node.href.baseVal.substring( 1 );
+					var usedNode = node.viewportElement.getElementById( usedNodeId );
+					if ( usedNode ) {
+
+						parseNode( usedNode, style );
+
+					} else {
+
+						console.warn( 'SVGLoader: \'use node\' references non-existent node id: ' + usedNodeId );
+
+					}
+
+					break;
+					// console.log( node );
+
+			}
+
+			if ( path ) {
+
+				if ( style.fill !== undefined && style.fill !== 'none' ) {
+
+					path.color.setStyle( style.fill );
+
+				}
+
+				transformPath( path, currentTransform );
+
+				paths.push( path );
+
+				path.userData = { node: node, style: style };
+
+			}
+
+			if ( traverseChildNodes ) {
+
+				var nodes = node.childNodes;
+
+				for ( var i = 0; i < nodes.length; i ++ ) {
+
+					parseNode( nodes[ i ], style );
+
+				}
+
+			}
+
+			if ( transform ) {
+
+				transformStack.pop();
+
+				if ( transformStack.length > 0 ) {
+
+					currentTransform.copy( transformStack[ transformStack.length - 1 ] );
+
+				} else {
+
+					currentTransform.identity();
+
+				}
+
+			}
+
+		}
+
+		function parsePathNode( node ) {
+
+			var path = new ShapePath();
+
+			var point = new Vector2();
+			var control = new Vector2();
+
+			var firstPoint = new Vector2();
+			var isFirstPoint = true;
+			var doSetFirstPoint = false;
+
+			var d = node.getAttribute( 'd' );
+
+			// console.log( d );
+
+			var commands = d.match( /[a-df-z][^a-df-z]*/ig );
+
+			for ( var i = 0, l = commands.length; i < l; i ++ ) {
+
+				var command = commands[ i ];
+
+				var type = command.charAt( 0 );
+				var data = command.substr( 1 ).trim();
+
+				if ( isFirstPoint === true ) {
+
+					doSetFirstPoint = true;
+					isFirstPoint = false;
+
+				}
+
+				switch ( type ) {
+
+					case 'M':
+						var numbers = parseFloats( data );
+						for ( var j = 0, jl = numbers.length; j < jl; j += 2 ) {
+
+							point.x = numbers[ j + 0 ];
+							point.y = numbers[ j + 1 ];
+							control.x = point.x;
+							control.y = point.y;
+
+							if ( j === 0 ) {
+
+								path.moveTo( point.x, point.y );
+
+							} else {
+
+								path.lineTo( point.x, point.y );
+
+							}
+
+							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
+
+						}
+
+						break;
+
+					case 'H':
+						var numbers = parseFloats( data );
+
+						for ( var j = 0, jl = numbers.length; j < jl; j ++ ) {
+
+							point.x = numbers[ j ];
+							control.x = point.x;
+							control.y = point.y;
+							path.lineTo( point.x, point.y );
+
+							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
+
+						}
+
+						break;
+
+					case 'V':
+						var numbers = parseFloats( data );
+
+						for ( var j = 0, jl = numbers.length; j < jl; j ++ ) {
+
+							point.y = numbers[ j ];
+							control.x = point.x;
+							control.y = point.y;
+							path.lineTo( point.x, point.y );
+
+							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
+
+						}
+
+						break;
+
+					case 'L':
+						var numbers = parseFloats( data );
+
+						for ( var j = 0, jl = numbers.length; j < jl; j += 2 ) {
+
+							point.x = numbers[ j + 0 ];
+							point.y = numbers[ j + 1 ];
+							control.x = point.x;
+							control.y = point.y;
+							path.lineTo( point.x, point.y );
+
+							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
+
+						}
+
+						break;
+
+					case 'C':
+						var numbers = parseFloats( data );
+
+						for ( var j = 0, jl = numbers.length; j < jl; j += 6 ) {
+
+							path.bezierCurveTo(
+								numbers[ j + 0 ],
+								numbers[ j + 1 ],
+								numbers[ j + 2 ],
+								numbers[ j + 3 ],
+								numbers[ j + 4 ],
+								numbers[ j + 5 ]
+							);
+							control.x = numbers[ j + 2 ];
+							control.y = numbers[ j + 3 ];
+							point.x = numbers[ j + 4 ];
+							point.y = numbers[ j + 5 ];
+
+							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
+
+						}
+
+						break;
+
+					case 'S':
+						var numbers = parseFloats( data );
+
+						for ( var j = 0, jl = numbers.length; j < jl; j += 4 ) {
+
+							path.bezierCurveTo(
+								getReflection( point.x, control.x ),
+								getReflection( point.y, control.y ),
+								numbers[ j + 0 ],
+								numbers[ j + 1 ],
+								numbers[ j + 2 ],
+								numbers[ j + 3 ]
+							);
+							control.x = numbers[ j + 0 ];
+							control.y = numbers[ j + 1 ];
+							point.x = numbers[ j + 2 ];
+							point.y = numbers[ j + 3 ];
+
+							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
+
+						}
+
+						break;
+
+					case 'Q':
+						var numbers = parseFloats( data );
+
+						for ( var j = 0, jl = numbers.length; j < jl; j += 4 ) {
+
+							path.quadraticCurveTo(
+								numbers[ j + 0 ],
+								numbers[ j + 1 ],
+								numbers[ j + 2 ],
+								numbers[ j + 3 ]
+							);
+							control.x = numbers[ j + 0 ];
+							control.y = numbers[ j + 1 ];
+							point.x = numbers[ j + 2 ];
+							point.y = numbers[ j + 3 ];
+
+							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
+
+						}
+
+						break;
+
+					case 'T':
+						var numbers = parseFloats( data );
+
+						for ( var j = 0, jl = numbers.length; j < jl; j += 2 ) {
+
+							var rx = getReflection( point.x, control.x );
+							var ry = getReflection( point.y, control.y );
+							path.quadraticCurveTo(
+								rx,
+								ry,
+								numbers[ j + 0 ],
+								numbers[ j + 1 ]
+							);
+							control.x = rx;
+							control.y = ry;
+							point.x = numbers[ j + 0 ];
+							point.y = numbers[ j + 1 ];
+
+							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
+
+						}
+
+						break;
+
+					case 'A':
+						var numbers = parseFloats( data );
+
+						for ( var j = 0, jl = numbers.length; j < jl; j += 7 ) {
+
+							// skip command if start point == end point
+							if ( numbers[ j + 5 ] == point.x && numbers[ j + 6 ] == point.y ) continue;
+
+							var start = point.clone();
+							point.x = numbers[ j + 5 ];
+							point.y = numbers[ j + 6 ];
+							control.x = point.x;
+							control.y = point.y;
+							parseArcCommand(
+								path, numbers[ j ], numbers[ j + 1 ], numbers[ j + 2 ], numbers[ j + 3 ], numbers[ j + 4 ], start, point
+							);
+
+							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
+
+						}
+
+						break;
+
+					case 'm':
+						var numbers = parseFloats( data );
+
+						for ( var j = 0, jl = numbers.length; j < jl; j += 2 ) {
+
+							point.x += numbers[ j + 0 ];
+							point.y += numbers[ j + 1 ];
+							control.x = point.x;
+							control.y = point.y;
+
+							if ( j === 0 ) {
+
+								path.moveTo( point.x, point.y );
+
+							} else {
+
+								path.lineTo( point.x, point.y );
+
+							}
+
+							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
+
+						}
+
+						break;
+
+					case 'h':
+						var numbers = parseFloats( data );
+
+						for ( var j = 0, jl = numbers.length; j < jl; j ++ ) {
+
+							point.x += numbers[ j ];
+							control.x = point.x;
+							control.y = point.y;
+							path.lineTo( point.x, point.y );
+
+							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
+
+						}
+
+						break;
+
+					case 'v':
+						var numbers = parseFloats( data );
+
+						for ( var j = 0, jl = numbers.length; j < jl; j ++ ) {
+
+							point.y += numbers[ j ];
+							control.x = point.x;
+							control.y = point.y;
+							path.lineTo( point.x, point.y );
+
+							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
+
+						}
+
+						break;
+
+					case 'l':
+						var numbers = parseFloats( data );
+
+						for ( var j = 0, jl = numbers.length; j < jl; j += 2 ) {
+
+							point.x += numbers[ j + 0 ];
+							point.y += numbers[ j + 1 ];
+							control.x = point.x;
+							control.y = point.y;
+							path.lineTo( point.x, point.y );
+
+							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
+
+						}
+
+						break;
+
+					case 'c':
+						var numbers = parseFloats( data );
+
+						for ( var j = 0, jl = numbers.length; j < jl; j += 6 ) {
+
+							path.bezierCurveTo(
+								point.x + numbers[ j + 0 ],
+								point.y + numbers[ j + 1 ],
+								point.x + numbers[ j + 2 ],
+								point.y + numbers[ j + 3 ],
+								point.x + numbers[ j + 4 ],
+								point.y + numbers[ j + 5 ]
+							);
+							control.x = point.x + numbers[ j + 2 ];
+							control.y = point.y + numbers[ j + 3 ];
+							point.x += numbers[ j + 4 ];
+							point.y += numbers[ j + 5 ];
+
+							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
+
+						}
+
+						break;
+
+					case 's':
+						var numbers = parseFloats( data );
+
+						for ( var j = 0, jl = numbers.length; j < jl; j += 4 ) {
+
+							path.bezierCurveTo(
+								getReflection( point.x, control.x ),
+								getReflection( point.y, control.y ),
+								point.x + numbers[ j + 0 ],
+								point.y + numbers[ j + 1 ],
+								point.x + numbers[ j + 2 ],
+								point.y + numbers[ j + 3 ]
+							);
+							control.x = point.x + numbers[ j + 0 ];
+							control.y = point.y + numbers[ j + 1 ];
+							point.x += numbers[ j + 2 ];
+							point.y += numbers[ j + 3 ];
+
+							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
+
+						}
+
+						break;
+
+					case 'q':
+						var numbers = parseFloats( data );
+
+						for ( var j = 0, jl = numbers.length; j < jl; j += 4 ) {
+
+							path.quadraticCurveTo(
+								point.x + numbers[ j + 0 ],
+								point.y + numbers[ j + 1 ],
+								point.x + numbers[ j + 2 ],
+								point.y + numbers[ j + 3 ]
+							);
+							control.x = point.x + numbers[ j + 0 ];
+							control.y = point.y + numbers[ j + 1 ];
+							point.x += numbers[ j + 2 ];
+							point.y += numbers[ j + 3 ];
+
+							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
+
+						}
+
+						break;
+
+					case 't':
+						var numbers = parseFloats( data );
+
+						for ( var j = 0, jl = numbers.length; j < jl; j += 2 ) {
+
+							var rx = getReflection( point.x, control.x );
+							var ry = getReflection( point.y, control.y );
+							path.quadraticCurveTo(
+								rx,
+								ry,
+								point.x + numbers[ j + 0 ],
+								point.y + numbers[ j + 1 ]
+							);
+							control.x = rx;
+							control.y = ry;
+							point.x = point.x + numbers[ j + 0 ];
+							point.y = point.y + numbers[ j + 1 ];
+
+							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
+
+						}
+
+						break;
+
+					case 'a':
+						var numbers = parseFloats( data );
+
+						for ( var j = 0, jl = numbers.length; j < jl; j += 7 ) {
+
+							// skip command if no displacement
+							if ( numbers[ j + 5 ] == 0 && numbers[ j + 6 ] == 0 ) continue;
+
+							var start = point.clone();
+							point.x += numbers[ j + 5 ];
+							point.y += numbers[ j + 6 ];
+							control.x = point.x;
+							control.y = point.y;
+							parseArcCommand(
+								path, numbers[ j ], numbers[ j + 1 ], numbers[ j + 2 ], numbers[ j + 3 ], numbers[ j + 4 ], start, point
+							);
+
+							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
+
+						}
+
+						break;
+
+					case 'Z':
+					case 'z':
+						path.currentPath.autoClose = true;
+
+						if ( path.currentPath.curves.length > 0 ) {
+
+							// Reset point to beginning of Path
+							point.copy( firstPoint );
+							path.currentPath.currentPoint.copy( point );
+							isFirstPoint = true;
+
+						}
+
+						break;
+
+					default:
+						console.warn( command );
+
+				}
+
+				// console.log( type, parseFloats( data ), parseFloats( data ).length  )
+
+				doSetFirstPoint = false;
+
+			}
+
+			return path;
+
+		}
+
+		function parseCSSStylesheet( node ) {
+
+			if ( ! node.sheet || ! node.sheet.cssRules || ! node.sheet.cssRules.length ) return;
+
+			for ( var i = 0; i < node.sheet.cssRules.length; i ++ ) {
+
+				var stylesheet = node.sheet.cssRules[ i ];
+
+				if ( stylesheet.type !== 1 ) continue;
+
+				var selectorList = stylesheet.selectorText
+					.split( /,/gm )
+					.filter( Boolean )
+					.map( i => i.trim() );
+
+				for ( var j = 0; j < selectorList.length; j ++ ) {
+
+					stylesheets[ selectorList[ j ] ] = Object.assign(
+						stylesheets[ selectorList[ j ] ] || {},
+						stylesheet.style
+					);
+
+				}
+
+			}
+
+		}
+
+		/**
+		 * https://www.w3.org/TR/SVG/implnote.html#ArcImplementationNotes
+		 * https://mortoray.com/2017/02/16/rendering-an-svg-elliptical-arc-as-bezier-curves/ Appendix: Endpoint to center arc conversion
+		 * From
+		 * rx ry x-axis-rotation large-arc-flag sweep-flag x y
+		 * To
+		 * aX, aY, xRadius, yRadius, aStartAngle, aEndAngle, aClockwise, aRotation
+		 */
+
+		function parseArcCommand( path, rx, ry, x_axis_rotation, large_arc_flag, sweep_flag, start, end ) {
+
+			if ( rx == 0 || ry == 0 ) {
+
+				// draw a line if either of the radii == 0
+				path.lineTo( end.x, end.y );
+				return;
+
+			}
+
+			x_axis_rotation = x_axis_rotation * Math.PI / 180;
+
+			// Ensure radii are positive
+			rx = Math.abs( rx );
+			ry = Math.abs( ry );
+
+			// Compute (x1', y1')
+			var dx2 = ( start.x - end.x ) / 2.0;
+			var dy2 = ( start.y - end.y ) / 2.0;
+			var x1p = Math.cos( x_axis_rotation ) * dx2 + Math.sin( x_axis_rotation ) * dy2;
+			var y1p = - Math.sin( x_axis_rotation ) * dx2 + Math.cos( x_axis_rotation ) * dy2;
+
+			// Compute (cx', cy')
+			var rxs = rx * rx;
+			var rys = ry * ry;
+			var x1ps = x1p * x1p;
+			var y1ps = y1p * y1p;
+
+			// Ensure radii are large enough
+			var cr = x1ps / rxs + y1ps / rys;
+
+			if ( cr > 1 ) {
+
+				// scale up rx,ry equally so cr == 1
+				var s = Math.sqrt( cr );
+				rx = s * rx;
+				ry = s * ry;
+				rxs = rx * rx;
+				rys = ry * ry;
+
+			}
+
+			var dq = ( rxs * y1ps + rys * x1ps );
+			var pq = ( rxs * rys - dq ) / dq;
+			var q = Math.sqrt( Math.max( 0, pq ) );
+			if ( large_arc_flag === sweep_flag ) q = - q;
+			var cxp = q * rx * y1p / ry;
+			var cyp = - q * ry * x1p / rx;
+
+			// Step 3: Compute (cx, cy) from (cx', cy')
+			var cx = Math.cos( x_axis_rotation ) * cxp - Math.sin( x_axis_rotation ) * cyp + ( start.x + end.x ) / 2;
+			var cy = Math.sin( x_axis_rotation ) * cxp + Math.cos( x_axis_rotation ) * cyp + ( start.y + end.y ) / 2;
+
+			// Step 4: Compute θ1 and Δθ
+			var theta = svgAngle( 1, 0, ( x1p - cxp ) / rx, ( y1p - cyp ) / ry );
+			var delta = svgAngle( ( x1p - cxp ) / rx, ( y1p - cyp ) / ry, ( - x1p - cxp ) / rx, ( - y1p - cyp ) / ry ) % ( Math.PI * 2 );
+
+			path.currentPath.absellipse( cx, cy, rx, ry, theta, theta + delta, sweep_flag === 0, x_axis_rotation );
+
+		}
+
+		function svgAngle( ux, uy, vx, vy ) {
+
+			var dot = ux * vx + uy * vy;
+			var len = Math.sqrt( ux * ux + uy * uy ) * Math.sqrt( vx * vx + vy * vy );
+			var ang = Math.acos( Math.max( - 1, Math.min( 1, dot / len ) ) ); // floating point precision, slightly over values appear
+			if ( ( ux * vy - uy * vx ) < 0 ) ang = - ang;
+			return ang;
+
+		}
+
+		/*
+		* According to https://www.w3.org/TR/SVG/shapes.html#RectElementRXAttribute
+		* rounded corner should be rendered to elliptical arc, but bezier curve does the job well enough
+		*/
+		function parseRectNode( node ) {
+
+			var x = parseFloatWithUnits( node.getAttribute( 'x' ) || 0 );
+			var y = parseFloatWithUnits( node.getAttribute( 'y' ) || 0 );
+			var rx = parseFloatWithUnits( node.getAttribute( 'rx' ) || 0 );
+			var ry = parseFloatWithUnits( node.getAttribute( 'ry' ) || 0 );
+			var w = parseFloatWithUnits( node.getAttribute( 'width' ) );
+			var h = parseFloatWithUnits( node.getAttribute( 'height' ) );
+
+			var path = new ShapePath();
+			path.moveTo( x + 2 * rx, y );
+			path.lineTo( x + w - 2 * rx, y );
+			if ( rx !== 0 || ry !== 0 ) path.bezierCurveTo( x + w, y, x + w, y, x + w, y + 2 * ry );
+			path.lineTo( x + w, y + h - 2 * ry );
+			if ( rx !== 0 || ry !== 0 ) path.bezierCurveTo( x + w, y + h, x + w, y + h, x + w - 2 * rx, y + h );
+			path.lineTo( x + 2 * rx, y + h );
+
+			if ( rx !== 0 || ry !== 0 ) {
+
+				path.bezierCurveTo( x, y + h, x, y + h, x, y + h - 2 * ry );
+
+			}
+
+			path.lineTo( x, y + 2 * ry );
+
+			if ( rx !== 0 || ry !== 0 ) {
+
+				path.bezierCurveTo( x, y, x, y, x + 2 * rx, y );
+
+			}
+
+			return path;
+
+		}
+
+		function parsePolygonNode( node ) {
+
+			function iterator( match, a, b ) {
+
+				var x = parseFloatWithUnits( a );
+				var y = parseFloatWithUnits( b );
+
+				if ( index === 0 ) {
+
+					path.moveTo( x, y );
+
+				} else {
+
+					path.lineTo( x, y );
+
+				}
+
+				index ++;
+
+			}
+
+			var regex = /(-?[\d\.?]+)[,|\s](-?[\d\.?]+)/g;
+
+			var path = new ShapePath();
+
+			var index = 0;
+
+			node.getAttribute( 'points' ).replace( regex, iterator );
+
+			path.currentPath.autoClose = true;
+
+			return path;
+
+		}
+
+		function parsePolylineNode( node ) {
+
+			function iterator( match, a, b ) {
+
+				var x = parseFloatWithUnits( a );
+				var y = parseFloatWithUnits( b );
+
+				if ( index === 0 ) {
+
+					path.moveTo( x, y );
+
+				} else {
+
+					path.lineTo( x, y );
+
+				}
+
+				index ++;
+
+			}
+
+			var regex = /(-?[\d\.?]+)[,|\s](-?[\d\.?]+)/g;
+
+			var path = new ShapePath();
+
+			var index = 0;
+
+			node.getAttribute( 'points' ).replace( regex, iterator );
+
+			path.currentPath.autoClose = false;
+
+			return path;
+
+		}
+
+		function parseCircleNode( node ) {
+
+			var x = parseFloatWithUnits( node.getAttribute( 'cx' ) );
+			var y = parseFloatWithUnits( node.getAttribute( 'cy' ) );
+			var r = parseFloatWithUnits( node.getAttribute( 'r' ) );
+
+			var subpath = new Path();
+			subpath.absarc( x, y, r, 0, Math.PI * 2 );
+
+			var path = new ShapePath();
+			path.subPaths.push( subpath );
+
+			return path;
+
+		}
+
+		function parseEllipseNode( node ) {
+
+			var x = parseFloatWithUnits( node.getAttribute( 'cx' ) );
+			var y = parseFloatWithUnits( node.getAttribute( 'cy' ) );
+			var rx = parseFloatWithUnits( node.getAttribute( 'rx' ) );
+			var ry = parseFloatWithUnits( node.getAttribute( 'ry' ) );
+
+			var subpath = new Path();
+			subpath.absellipse( x, y, rx, ry, 0, Math.PI * 2 );
+
+			var path = new ShapePath();
+			path.subPaths.push( subpath );
+
+			return path;
+
+		}
+
+		function parseLineNode( node ) {
+
+			var x1 = parseFloatWithUnits( node.getAttribute( 'x1' ) );
+			var y1 = parseFloatWithUnits( node.getAttribute( 'y1' ) );
+			var x2 = parseFloatWithUnits( node.getAttribute( 'x2' ) );
+			var y2 = parseFloatWithUnits( node.getAttribute( 'y2' ) );
+
+			var path = new ShapePath();
+			path.moveTo( x1, y1 );
+			path.lineTo( x2, y2 );
+			path.currentPath.autoClose = false;
+
+			return path;
+
+		}
+
+		//
+
+		function parseStyle( node, style ) {
+
+			style = Object.assign( {}, style ); // clone style
+
+			var stylesheetStyles = {};
+
+			if ( node.hasAttribute( 'class' ) ) {
+
+				var classSelectors = node.getAttribute( 'class' )
+					.split( /\s/ )
+					.filter( Boolean )
+					.map( i => i.trim() );
+
+				for ( var i = 0; i < classSelectors.length; i ++ ) {
+
+					stylesheetStyles = Object.assign( stylesheetStyles, stylesheets[ '.' + classSelectors[ i ] ] );
+
+				}
+
+			}
+
+			if ( node.hasAttribute( 'id' ) ) {
+
+				stylesheetStyles = Object.assign( stylesheetStyles, stylesheets[ '#' + node.getAttribute( 'id' ) ] );
+
+			}
+
+			function addStyle( svgName, jsName, adjustFunction ) {
+
+				if ( adjustFunction === undefined ) adjustFunction = function copy( v ) {
+
+					if ( v.startsWith( 'url' ) ) console.warn( 'SVGLoader: url access in attributes is not implemented.' );
+
+					return v;
+
+				};
+
+				if ( node.hasAttribute( svgName ) ) style[ jsName ] = adjustFunction( node.getAttribute( svgName ) );
+				if ( stylesheetStyles[ svgName ] ) style[ jsName ] = adjustFunction( stylesheetStyles[ svgName ] );
+				if ( node.style && node.style[ svgName ] !== '' ) style[ jsName ] = adjustFunction( node.style[ svgName ] );
+
+			}
+
+			function clamp( v ) {
+
+				return Math.max( 0, Math.min( 1, parseFloatWithUnits( v ) ) );
+
+			}
+
+			function positive( v ) {
+
+				return Math.max( 0, parseFloatWithUnits( v ) );
+
+			}
+
+			addStyle( 'fill', 'fill' );
+			addStyle( 'fill-opacity', 'fillOpacity', clamp );
+			addStyle( 'opacity', 'opacity', clamp );
+			addStyle( 'stroke', 'stroke' );
+			addStyle( 'stroke-opacity', 'strokeOpacity', clamp );
+			addStyle( 'stroke-width', 'strokeWidth', positive );
+			addStyle( 'stroke-linejoin', 'strokeLineJoin' );
+			addStyle( 'stroke-linecap', 'strokeLineCap' );
+			addStyle( 'stroke-miterlimit', 'strokeMiterLimit', positive );
+			addStyle( 'visibility', 'visibility' );
+
+			return style;
+
+		}
+
+		// http://www.w3.org/TR/SVG11/implnote.html#PathElementImplementationNotes
+
+		function getReflection( a, b ) {
+
+			return a - ( b - a );
+
+		}
+
+		function parseFloats( string ) {
+
+			var array = string.split( /[\s,]+|(?=\s?[+\-])/ );
+
+			for ( var i = 0; i < array.length; i ++ ) {
+
+				var number = array[ i ];
+
+				// Handle values like 48.6037.7.8
+				// TODO Find a regex for this
+
+				if ( number.indexOf( '.' ) !== number.lastIndexOf( '.' ) ) {
+
+					var split = number.split( '.' );
+
+					for ( var s = 2; s < split.length; s ++ ) {
+
+						array.splice( i + s - 1, 0, '0.' + split[ s ] );
+
+					}
+
+				}
+
+				array[ i ] = parseFloatWithUnits( number );
+
+			}
+
+			return array;
+
+
+		}
+
+		// Units
+
+		var units = [ 'mm', 'cm', 'in', 'pt', 'pc', 'px' ];
+
+		// Conversion: [ fromUnit ][ toUnit ] (-1 means dpi dependent)
+		var unitConversion = {
+
+			'mm': {
+				'mm': 1,
+				'cm': 0.1,
+				'in': 1 / 25.4,
+				'pt': 72 / 25.4,
+				'pc': 6 / 25.4,
+				'px': - 1
+			},
+			'cm': {
+				'mm': 10,
+				'cm': 1,
+				'in': 1 / 2.54,
+				'pt': 72 / 2.54,
+				'pc': 6 / 2.54,
+				'px': - 1
+			},
+			'in': {
+				'mm': 25.4,
+				'cm': 2.54,
+				'in': 1,
+				'pt': 72,
+				'pc': 6,
+				'px': - 1
+			},
+			'pt': {
+				'mm': 25.4 / 72,
+				'cm': 2.54 / 72,
+				'in': 1 / 72,
+				'pt': 1,
+				'pc': 6 / 72,
+				'px': - 1
+			},
+			'pc': {
+				'mm': 25.4 / 6,
+				'cm': 2.54 / 6,
+				'in': 1 / 6,
+				'pt': 72 / 6,
+				'pc': 1,
+				'px': - 1
+			},
+			'px': {
+				'px': 1
+			}
+
+		};
+
+		function parseFloatWithUnits( string ) {
+
+			var theUnit = 'px';
+
+			if ( typeof string === 'string' || string instanceof String ) {
+
+				for ( var i = 0, n = units.length; i < n; i ++ ) {
+
+					var u = units[ i ];
+
+					if ( string.endsWith( u ) ) {
+
+						theUnit = u;
+						string = string.substring( 0, string.length - u.length );
+						break;
+
+					}
+
+				}
+
+			}
+
+			var scale = undefined;
+
+			if ( theUnit === 'px' && scope.defaultUnit !== 'px' ) {
+
+				// Conversion scale from  pixels to inches, then to default units
+
+				scale = unitConversion[ 'in' ][ scope.defaultUnit ] / scope.defaultDPI;
+
+			} else {
+
+				scale = unitConversion[ theUnit ][ scope.defaultUnit ];
+
+				if ( scale < 0 ) {
+
+					// Conversion scale to pixels
+
+					scale = unitConversion[ theUnit ][ 'in' ] * scope.defaultDPI;
+
+				}
+
+			}
+
+			return scale * parseFloat( string );
+
+		}
+
+		// Transforms
+
+		function getNodeTransform( node ) {
+
+			if ( ! ( node.hasAttribute( 'transform' ) || ( node.nodeName === 'use' && ( node.hasAttribute( 'x' ) || node.hasAttribute( 'y' ) ) ) ) ) {
+
+				return null;
+
+			}
+
+			var transform = parseNodeTransform( node );
+
+			if ( transformStack.length > 0 ) {
+
+				transform.premultiply( transformStack[ transformStack.length - 1 ] );
+
+			}
+
+			currentTransform.copy( transform );
+			transformStack.push( transform );
+
+			return transform;
+
+		}
+
+		function parseNodeTransform( node ) {
+
+			var transform = new Matrix3();
+			var currentTransform = tempTransform0;
+
+			if ( node.nodeName === 'use' && ( node.hasAttribute( 'x' ) || node.hasAttribute( 'y' ) ) ) {
+
+				var tx = parseFloatWithUnits( node.getAttribute( 'x' ) );
+				var ty = parseFloatWithUnits( node.getAttribute( 'y' ) );
+
+				transform.translate( tx, ty );
+
+			}
+
+			if ( node.hasAttribute( 'transform' ) ) {
+
+				var transformsTexts = node.getAttribute( 'transform' ).split( ')' );
+
+				for ( var tIndex = transformsTexts.length - 1; tIndex >= 0; tIndex -- ) {
+
+					var transformText = transformsTexts[ tIndex ].trim();
+
+					if ( transformText === '' ) continue;
+
+					var openParPos = transformText.indexOf( '(' );
+					var closeParPos = transformText.length;
+
+					if ( openParPos > 0 && openParPos < closeParPos ) {
+
+						var transformType = transformText.substr( 0, openParPos );
+
+						var array = parseFloats( transformText.substr( openParPos + 1, closeParPos - openParPos - 1 ) );
+
+						currentTransform.identity();
+
+						switch ( transformType ) {
+
+							case 'translate':
+
+								if ( array.length >= 1 ) {
+
+									var tx = array[ 0 ];
+									var ty = tx;
+
+									if ( array.length >= 2 ) {
+
+										ty = array[ 1 ];
+
+									}
+
+									currentTransform.translate( tx, ty );
+
+								}
+
+								break;
+
+							case 'rotate':
+
+								if ( array.length >= 1 ) {
+
+									var angle = 0;
+									var cx = 0;
+									var cy = 0;
+
+									// Angle
+									angle = - array[ 0 ] * Math.PI / 180;
+
+									if ( array.length >= 3 ) {
+
+										// Center x, y
+										cx = array[ 1 ];
+										cy = array[ 2 ];
+
+									}
+
+									// Rotate around center (cx, cy)
+									tempTransform1.identity().translate( - cx, - cy );
+									tempTransform2.identity().rotate( angle );
+									tempTransform3.multiplyMatrices( tempTransform2, tempTransform1 );
+									tempTransform1.identity().translate( cx, cy );
+									currentTransform.multiplyMatrices( tempTransform1, tempTransform3 );
+
+								}
+
+								break;
+
+							case 'scale':
+
+								if ( array.length >= 1 ) {
+
+									var scaleX = array[ 0 ];
+									var scaleY = scaleX;
+
+									if ( array.length >= 2 ) {
+
+										scaleY = array[ 1 ];
+
+									}
+
+									currentTransform.scale( scaleX, scaleY );
+
+								}
+
+								break;
+
+							case 'skewX':
+
+								if ( array.length === 1 ) {
+
+									currentTransform.set(
+										1, Math.tan( array[ 0 ] * Math.PI / 180 ), 0,
+										0, 1, 0,
+										0, 0, 1
+									);
+
+								}
+
+								break;
+
+							case 'skewY':
+
+								if ( array.length === 1 ) {
+
+									currentTransform.set(
+										1, 0, 0,
+										Math.tan( array[ 0 ] * Math.PI / 180 ), 1, 0,
+										0, 0, 1
+									);
+
+								}
+
+								break;
+
+							case 'matrix':
+
+								if ( array.length === 6 ) {
+
+									currentTransform.set(
+										array[ 0 ], array[ 2 ], array[ 4 ],
+										array[ 1 ], array[ 3 ], array[ 5 ],
+										0, 0, 1
+									);
+
+								}
+
+								break;
+
+						}
+
+					}
+
+					transform.premultiply( currentTransform );
+
+				}
+
+			}
+
+			return transform;
+
+		}
+
+		function transformPath( path, m ) {
+
+			function transfVec2( v2 ) {
+
+				tempV3.set( v2.x, v2.y, 1 ).applyMatrix3( m );
+
+				v2.set( tempV3.x, tempV3.y );
+
+			}
+
+			var isRotated = isTransformRotated( m );
+
+			var subPaths = path.subPaths;
+
+			for ( var i = 0, n = subPaths.length; i < n; i ++ ) {
+
+				var subPath = subPaths[ i ];
+				var curves = subPath.curves;
+
+				for ( var j = 0; j < curves.length; j ++ ) {
+
+					var curve = curves[ j ];
+
+					if ( curve.isLineCurve ) {
+
+						transfVec2( curve.v1 );
+						transfVec2( curve.v2 );
+
+					} else if ( curve.isCubicBezierCurve ) {
+
+						transfVec2( curve.v0 );
+						transfVec2( curve.v1 );
+						transfVec2( curve.v2 );
+						transfVec2( curve.v3 );
+
+					} else if ( curve.isQuadraticBezierCurve ) {
+
+						transfVec2( curve.v0 );
+						transfVec2( curve.v1 );
+						transfVec2( curve.v2 );
+
+					} else if ( curve.isEllipseCurve ) {
+
+						if ( isRotated ) {
+
+							console.warn( 'SVGLoader: Elliptic arc or ellipse rotation or skewing is not implemented.' );
+
+						}
+
+						tempV2.set( curve.aX, curve.aY );
+						transfVec2( tempV2 );
+						curve.aX = tempV2.x;
+						curve.aY = tempV2.y;
+
+						curve.xRadius *= getTransformScaleX( m );
+						curve.yRadius *= getTransformScaleY( m );
+
+					}
+
+				}
+
+			}
+
+		}
+
+		function isTransformRotated( m ) {
+
+			return m.elements[ 1 ] !== 0 || m.elements[ 3 ] !== 0;
+
+		}
+
+		function getTransformScaleX( m ) {
+
+			var te = m.elements;
+			return Math.sqrt( te[ 0 ] * te[ 0 ] + te[ 1 ] * te[ 1 ] );
+
+		}
+
+		function getTransformScaleY( m ) {
+
+			var te = m.elements;
+			return Math.sqrt( te[ 3 ] * te[ 3 ] + te[ 4 ] * te[ 4 ] );
+
+		}
+
+		//
+
+		var paths = [];
+		var stylesheets = {};
+
+		var transformStack = [];
+
+		var tempTransform0 = new Matrix3();
+		var tempTransform1 = new Matrix3();
+		var tempTransform2 = new Matrix3();
+		var tempTransform3 = new Matrix3();
+		var tempV2 = new Vector2();
+		var tempV3 = new Vector3();
+
+		var currentTransform = new Matrix3();
+
+		var xml = new $DOMParser().parseFromString( text, 'image/svg+xml' ); // application/xml
+
+		parseNode( xml.documentElement, {
+			fill: '#000',
+			fillOpacity: 1,
+			strokeOpacity: 1,
+			strokeWidth: 1,
+			strokeLineJoin: 'miter',
+			strokeLineCap: 'butt',
+			strokeMiterLimit: 4
+		} );
+
+		var data = { paths: paths, xml: xml.documentElement };
+
+		// console.log( paths );
+		return data;
+
+	}
+
+} );
+
+SVGLoader.getStrokeStyle = function ( width, color, lineJoin, lineCap, miterLimit ) {
+
+	// Param width: Stroke width
+	// Param color: As returned by THREE.Color.getStyle()
+	// Param lineJoin: One of "round", "bevel", "miter" or "miter-limit"
+	// Param lineCap: One of "round", "square" or "butt"
+	// Param miterLimit: Maximum join length, in multiples of the "width" parameter (join is truncated if it exceeds that distance)
+	// Returns style object
+
+	width = width !== undefined ? width : 1;
+	color = color !== undefined ? color : '#000';
+	lineJoin = lineJoin !== undefined ? lineJoin : 'miter';
+	lineCap = lineCap !== undefined ? lineCap : 'butt';
+	miterLimit = miterLimit !== undefined ? miterLimit : 4;
+
+	return {
+		strokeColor: color,
+		strokeWidth: width,
+		strokeLineJoin: lineJoin,
+		strokeLineCap: lineCap,
+		strokeMiterLimit: miterLimit
+	};
+
+};
+
+SVGLoader.pointsToStroke = function ( points, style, arcDivisions, minDistance ) {
+
+	// Generates a stroke with some witdh around the given path.
+	// The path can be open or closed (last point equals to first point)
+	// Param points: Array of Vector2D (the path). Minimum 2 points.
+	// Param style: Object with SVG properties as returned by SVGLoader.getStrokeStyle(), or SVGLoader.parse() in the path.userData.style object
+	// Params arcDivisions: Arc divisions for round joins and endcaps. (Optional)
+	// Param minDistance: Points closer to this distance will be merged. (Optional)
+	// Returns BufferGeometry with stroke triangles (In plane z = 0). UV coordinates are generated ('u' along path. 'v' across it, from left to right)
+
+	var vertices = [];
+	var normals = [];
+	var uvs = [];
+
+	if ( SVGLoader.pointsToStrokeWithBuffers( points, style, arcDivisions, minDistance, vertices, normals, uvs ) === 0 ) {
+
+		return null;
+
+	}
+
+	var geometry = new BufferGeometry();
+	geometry.setAttribute( 'position', new Float32BufferAttribute( vertices, 3 ) );
+	geometry.setAttribute( 'normal', new Float32BufferAttribute( normals, 3 ) );
+	geometry.setAttribute( 'uv', new Float32BufferAttribute( uvs, 2 ) );
+
+	return geometry;
+
+};
+
+SVGLoader.pointsToStrokeWithBuffers = function () {
+
+	var tempV2_1 = new Vector2();
+	var tempV2_2 = new Vector2();
+	var tempV2_3 = new Vector2();
+	var tempV2_4 = new Vector2();
+	var tempV2_5 = new Vector2();
+	var tempV2_6 = new Vector2();
+	var tempV2_7 = new Vector2();
+	var lastPointL = new Vector2();
+	var lastPointR = new Vector2();
+	var point0L = new Vector2();
+	var point0R = new Vector2();
+	var currentPointL = new Vector2();
+	var currentPointR = new Vector2();
+	var nextPointL = new Vector2();
+	var nextPointR = new Vector2();
+	var innerPoint = new Vector2();
+	var outerPoint = new Vector2();
+
+	return function ( points, style, arcDivisions, minDistance, vertices, normals, uvs, vertexOffset ) {
+
+		// This function can be called to update existing arrays or buffers.
+		// Accepts same parameters as pointsToStroke, plus the buffers and optional offset.
+		// Param vertexOffset: Offset vertices to start writing in the buffers (3 elements/vertex for vertices and normals, and 2 elements/vertex for uvs)
+		// Returns number of written vertices / normals / uvs pairs
+		// if 'vertices' parameter is undefined no triangles will be generated, but the returned vertices count will still be valid (useful to preallocate the buffers)
+		// 'normals' and 'uvs' buffers are optional
+
+		arcDivisions = arcDivisions !== undefined ? arcDivisions : 12;
+		minDistance = minDistance !== undefined ? minDistance : 0.001;
+		vertexOffset = vertexOffset !== undefined ? vertexOffset : 0;
+
+		// First ensure there are no duplicated points
+		points = removeDuplicatedPoints( points );
+
+		var numPoints = points.length;
+
+		if ( numPoints < 2 ) return 0;
+
+		var isClosed = points[ 0 ].equals( points[ numPoints - 1 ] );
+
+		var currentPoint;
+		var previousPoint = points[ 0 ];
+		var nextPoint;
+
+		var strokeWidth2 = style.strokeWidth / 2;
+
+		var deltaU = 1 / ( numPoints - 1 );
+		var u0 = 0;
+
+		var innerSideModified;
+		var joinIsOnLeftSide;
+		var isMiter;
+		var initialJoinIsOnLeftSide = false;
+
+		var numVertices = 0;
+		var currentCoordinate = vertexOffset * 3;
+		var currentCoordinateUV = vertexOffset * 2;
+
+		// Get initial left and right stroke points
+		getNormal( points[ 0 ], points[ 1 ], tempV2_1 ).multiplyScalar( strokeWidth2 );
+		lastPointL.copy( points[ 0 ] ).sub( tempV2_1 );
+		lastPointR.copy( points[ 0 ] ).add( tempV2_1 );
+		point0L.copy( lastPointL );
+		point0R.copy( lastPointR );
+
+		for ( var iPoint = 1; iPoint < numPoints; iPoint ++ ) {
+
+			currentPoint = points[ iPoint ];
+
+			// Get next point
+			if ( iPoint === numPoints - 1 ) {
+
+				if ( isClosed ) {
+
+					// Skip duplicated initial point
+					nextPoint = points[ 1 ];
+
+				} else nextPoint = undefined;
+
+			} else {
+
+				nextPoint = points[ iPoint + 1 ];
+
+			}
+
+			// Normal of previous segment in tempV2_1
+			var normal1 = tempV2_1;
+			getNormal( previousPoint, currentPoint, normal1 );
+
+			tempV2_3.copy( normal1 ).multiplyScalar( strokeWidth2 );
+			currentPointL.copy( currentPoint ).sub( tempV2_3 );
+			currentPointR.copy( currentPoint ).add( tempV2_3 );
+
+			var u1 = u0 + deltaU;
+
+			innerSideModified = false;
+
+			if ( nextPoint !== undefined ) {
+
+				// Normal of next segment in tempV2_2
+				getNormal( currentPoint, nextPoint, tempV2_2 );
+
+				tempV2_3.copy( tempV2_2 ).multiplyScalar( strokeWidth2 );
+				nextPointL.copy( currentPoint ).sub( tempV2_3 );
+				nextPointR.copy( currentPoint ).add( tempV2_3 );
+
+				joinIsOnLeftSide = true;
+				tempV2_3.subVectors( nextPoint, previousPoint );
+				if ( normal1.dot( tempV2_3 ) < 0 ) {
+
+					joinIsOnLeftSide = false;
+
+				}
+
+				if ( iPoint === 1 ) initialJoinIsOnLeftSide = joinIsOnLeftSide;
+
+				tempV2_3.subVectors( nextPoint, currentPoint );
+				tempV2_3.normalize();
+				var dot = Math.abs( normal1.dot( tempV2_3 ) );
+
+				// If path is straight, don't create join
+				if ( dot !== 0 ) {
+
+					// Compute inner and outer segment intersections
+					var miterSide = strokeWidth2 / dot;
+					tempV2_3.multiplyScalar( - miterSide );
+					tempV2_4.subVectors( currentPoint, previousPoint );
+					tempV2_5.copy( tempV2_4 ).setLength( miterSide ).add( tempV2_3 );
+					innerPoint.copy( tempV2_5 ).negate();
+					var miterLength2 = tempV2_5.length();
+					var segmentLengthPrev = tempV2_4.length();
+					tempV2_4.divideScalar( segmentLengthPrev );
+					tempV2_6.subVectors( nextPoint, currentPoint );
+					var segmentLengthNext = tempV2_6.length();
+					tempV2_6.divideScalar( segmentLengthNext );
+					// Check that previous and next segments doesn't overlap with the innerPoint of intersection
+					if ( tempV2_4.dot( innerPoint ) < segmentLengthPrev && tempV2_6.dot( innerPoint ) < segmentLengthNext ) {
+
+						innerSideModified = true;
+
+					}
+
+					outerPoint.copy( tempV2_5 ).add( currentPoint );
+					innerPoint.add( currentPoint );
+
+					isMiter = false;
+
+					if ( innerSideModified ) {
+
+						if ( joinIsOnLeftSide ) {
+
+							nextPointR.copy( innerPoint );
+							currentPointR.copy( innerPoint );
+
+						} else {
+
+							nextPointL.copy( innerPoint );
+							currentPointL.copy( innerPoint );
+
+						}
+
+					} else {
+
+						// The segment triangles are generated here if there was overlapping
+
+						makeSegmentTriangles();
+
+					}
+
+					switch ( style.strokeLineJoin ) {
+
+						case 'bevel':
+
+							makeSegmentWithBevelJoin( joinIsOnLeftSide, innerSideModified, u1 );
+
+							break;
+
+						case 'round':
+
+							// Segment triangles
+
+							createSegmentTrianglesWithMiddleSection( joinIsOnLeftSide, innerSideModified );
+
+							// Join triangles
+
+							if ( joinIsOnLeftSide ) {
+
+								makeCircularSector( currentPoint, currentPointL, nextPointL, u1, 0 );
+
+							} else {
+
+								makeCircularSector( currentPoint, nextPointR, currentPointR, u1, 1 );
+
+							}
+
+							break;
+
+						case 'miter':
+						case 'miter-clip':
+						default:
+
+							var miterFraction = ( strokeWidth2 * style.strokeMiterLimit ) / miterLength2;
+
+							if ( miterFraction < 1 ) {
+
+								// The join miter length exceeds the miter limit
+
+								if ( style.strokeLineJoin !== 'miter-clip' ) {
+
+									makeSegmentWithBevelJoin( joinIsOnLeftSide, innerSideModified, u1 );
+									break;
+
+								} else {
+
+									// Segment triangles
+
+									createSegmentTrianglesWithMiddleSection( joinIsOnLeftSide, innerSideModified );
+
+									// Miter-clip join triangles
+
+									if ( joinIsOnLeftSide ) {
+
+										tempV2_6.subVectors( outerPoint, currentPointL ).multiplyScalar( miterFraction ).add( currentPointL );
+										tempV2_7.subVectors( outerPoint, nextPointL ).multiplyScalar( miterFraction ).add( nextPointL );
+
+										addVertex( currentPointL, u1, 0 );
+										addVertex( tempV2_6, u1, 0 );
+										addVertex( currentPoint, u1, 0.5 );
+
+										addVertex( currentPoint, u1, 0.5 );
+										addVertex( tempV2_6, u1, 0 );
+										addVertex( tempV2_7, u1, 0 );
+
+										addVertex( currentPoint, u1, 0.5 );
+										addVertex( tempV2_7, u1, 0 );
+										addVertex( nextPointL, u1, 0 );
+
+									} else {
+
+										tempV2_6.subVectors( outerPoint, currentPointR ).multiplyScalar( miterFraction ).add( currentPointR );
+										tempV2_7.subVectors( outerPoint, nextPointR ).multiplyScalar( miterFraction ).add( nextPointR );
+
+										addVertex( currentPointR, u1, 1 );
+										addVertex( tempV2_6, u1, 1 );
+										addVertex( currentPoint, u1, 0.5 );
+
+										addVertex( currentPoint, u1, 0.5 );
+										addVertex( tempV2_6, u1, 1 );
+										addVertex( tempV2_7, u1, 1 );
+
+										addVertex( currentPoint, u1, 0.5 );
+										addVertex( tempV2_7, u1, 1 );
+										addVertex( nextPointR, u1, 1 );
+
+									}
+
+								}
+
+							} else {
+
+								// Miter join segment triangles
+
+								if ( innerSideModified ) {
+
+									// Optimized segment + join triangles
+
+									if ( joinIsOnLeftSide ) {
+
+										addVertex( lastPointR, u0, 1 );
+										addVertex( lastPointL, u0, 0 );
+										addVertex( outerPoint, u1, 0 );
+
+										addVertex( lastPointR, u0, 1 );
+										addVertex( outerPoint, u1, 0 );
+										addVertex( innerPoint, u1, 1 );
+
+									} else {
+
+										addVertex( lastPointR, u0, 1 );
+										addVertex( lastPointL, u0, 0 );
+										addVertex( outerPoint, u1, 1 );
+
+										addVertex( lastPointL, u0, 0 );
+										addVertex( innerPoint, u1, 0 );
+										addVertex( outerPoint, u1, 1 );
+
+									}
+
+
+									if ( joinIsOnLeftSide ) {
+
+										nextPointL.copy( outerPoint );
+
+									} else {
+
+										nextPointR.copy( outerPoint );
+
+									}
+
+
+								} else {
+
+									// Add extra miter join triangles
+
+									if ( joinIsOnLeftSide ) {
+
+										addVertex( currentPointL, u1, 0 );
+										addVertex( outerPoint, u1, 0 );
+										addVertex( currentPoint, u1, 0.5 );
+
+										addVertex( currentPoint, u1, 0.5 );
+										addVertex( outerPoint, u1, 0 );
+										addVertex( nextPointL, u1, 0 );
+
+									} else {
+
+										addVertex( currentPointR, u1, 1 );
+										addVertex( outerPoint, u1, 1 );
+										addVertex( currentPoint, u1, 0.5 );
+
+										addVertex( currentPoint, u1, 0.5 );
+										addVertex( outerPoint, u1, 1 );
+										addVertex( nextPointR, u1, 1 );
+
+									}
+
+								}
+
+								isMiter = true;
+
+							}
+
+							break;
+
+					}
+
+				} else {
+
+					// The segment triangles are generated here when two consecutive points are collinear
+
+					makeSegmentTriangles();
+
+				}
+
+			} else {
+
+				// The segment triangles are generated here if it is the ending segment
+
+				makeSegmentTriangles();
+
+			}
+
+			if ( ! isClosed && iPoint === numPoints - 1 ) {
+
+				// Start line endcap
+				addCapGeometry( points[ 0 ], point0L, point0R, joinIsOnLeftSide, true, u0 );
+
+			}
+
+			// Increment loop variables
+
+			u0 = u1;
+
+			previousPoint = currentPoint;
+
+			lastPointL.copy( nextPointL );
+			lastPointR.copy( nextPointR );
+
+		}
+
+		if ( ! isClosed ) {
+
+			// Ending line endcap
+			addCapGeometry( currentPoint, currentPointL, currentPointR, joinIsOnLeftSide, false, u1 );
+
+		} else if ( innerSideModified && vertices ) {
+
+			// Modify path first segment vertices to adjust to the segments inner and outer intersections
+
+			var lastOuter = outerPoint;
+			var lastInner = innerPoint;
+
+			if ( initialJoinIsOnLeftSide !== joinIsOnLeftSide ) {
+
+				lastOuter = innerPoint;
+				lastInner = outerPoint;
+
+			}
+
+			if ( joinIsOnLeftSide ) {
+
+				if ( isMiter || initialJoinIsOnLeftSide ) {
+
+					lastInner.toArray( vertices, 0 * 3 );
+					lastInner.toArray( vertices, 3 * 3 );
+
+					if ( isMiter ) {
+
+						lastOuter.toArray( vertices, 1 * 3 );
+
+					}
+
+				}
+
+			} else {
+
+				if ( isMiter || ! initialJoinIsOnLeftSide ) {
+
+					lastInner.toArray( vertices, 1 * 3 );
+					lastInner.toArray( vertices, 3 * 3 );
+
+					if ( isMiter ) {
+
+						lastOuter.toArray( vertices, 0 * 3 );
+
+					}
+
+				}
+
+			}
+
+		}
+
+		return numVertices;
+
+		// -- End of algorithm
+
+		// -- Functions
+
+		function getNormal( p1, p2, result ) {
+
+			result.subVectors( p2, p1 );
+			return result.set( - result.y, result.x ).normalize();
+
+		}
+
+		function addVertex( position, u, v ) {
+
+			if ( vertices ) {
+
+				vertices[ currentCoordinate ] = position.x;
+				vertices[ currentCoordinate + 1 ] = position.y;
+				vertices[ currentCoordinate + 2 ] = 0;
+
+				if ( normals ) {
+
+					normals[ currentCoordinate ] = 0;
+					normals[ currentCoordinate + 1 ] = 0;
+					normals[ currentCoordinate + 2 ] = 1;
+
+				}
+
+				currentCoordinate += 3;
+
+				if ( uvs ) {
+
+					uvs[ currentCoordinateUV ] = u;
+					uvs[ currentCoordinateUV + 1 ] = v;
+
+					currentCoordinateUV += 2;
+
+				}
+
+			}
+
+			numVertices += 3;
+
+		}
+
+		function makeCircularSector( center, p1, p2, u, v ) {
+
+			// param p1, p2: Points in the circle arc.
+			// p1 and p2 are in clockwise direction.
+
+			tempV2_1.copy( p1 ).sub( center ).normalize();
+			tempV2_2.copy( p2 ).sub( center ).normalize();
+
+			var angle = Math.PI;
+			var dot = tempV2_1.dot( tempV2_2 );
+			if ( Math.abs( dot ) < 1 ) angle = Math.abs( Math.acos( dot ) );
+
+			angle /= arcDivisions;
+
+			tempV2_3.copy( p1 );
+
+			for ( var i = 0, il = arcDivisions - 1; i < il; i ++ ) {
+
+				tempV2_4.copy( tempV2_3 ).rotateAround( center, angle );
+
+				addVertex( tempV2_3, u, v );
+				addVertex( tempV2_4, u, v );
+				addVertex( center, u, 0.5 );
+
+				tempV2_3.copy( tempV2_4 );
+
+			}
+
+			addVertex( tempV2_4, u, v );
+			addVertex( p2, u, v );
+			addVertex( center, u, 0.5 );
+
+		}
+
+		function makeSegmentTriangles() {
+
+			addVertex( lastPointR, u0, 1 );
+			addVertex( lastPointL, u0, 0 );
+			addVertex( currentPointL, u1, 0 );
+
+			addVertex( lastPointR, u0, 1 );
+			addVertex( currentPointL, u1, 1 );
+			addVertex( currentPointR, u1, 0 );
+
+		}
+
+		function makeSegmentWithBevelJoin( joinIsOnLeftSide, innerSideModified, u ) {
+
+			if ( innerSideModified ) {
+
+				// Optimized segment + bevel triangles
+
+				if ( joinIsOnLeftSide ) {
+
+					// Path segments triangles
+
+					addVertex( lastPointR, u0, 1 );
+					addVertex( lastPointL, u0, 0 );
+					addVertex( currentPointL, u1, 0 );
+
+					addVertex( lastPointR, u0, 1 );
+					addVertex( currentPointL, u1, 0 );
+					addVertex( innerPoint, u1, 1 );
+
+					// Bevel join triangle
+
+					addVertex( currentPointL, u, 0 );
+					addVertex( nextPointL, u, 0 );
+					addVertex( innerPoint, u, 0.5 );
+
+				} else {
+
+					// Path segments triangles
+
+					addVertex( lastPointR, u0, 1 );
+					addVertex( lastPointL, u0, 0 );
+					addVertex( currentPointR, u1, 1 );
+
+					addVertex( lastPointL, u0, 0 );
+					addVertex( innerPoint, u1, 0 );
+					addVertex( currentPointR, u1, 1 );
+
+					// Bevel join triangle
+
+					addVertex( currentPointR, u, 1 );
+					addVertex( nextPointR, u, 0 );
+					addVertex( innerPoint, u, 0.5 );
+
+				}
+
+			} else {
+
+				// Bevel join triangle. The segment triangles are done in the main loop
+
+				if ( joinIsOnLeftSide ) {
+
+					addVertex( currentPointL, u, 0 );
+					addVertex( nextPointL, u, 0 );
+					addVertex( currentPoint, u, 0.5 );
+
+				} else {
+
+					addVertex( currentPointR, u, 1 );
+					addVertex( nextPointR, u, 0 );
+					addVertex( currentPoint, u, 0.5 );
+
+				}
+
+			}
+
+		}
+
+		function createSegmentTrianglesWithMiddleSection( joinIsOnLeftSide, innerSideModified ) {
+
+			if ( innerSideModified ) {
+
+				if ( joinIsOnLeftSide ) {
+
+					addVertex( lastPointR, u0, 1 );
+					addVertex( lastPointL, u0, 0 );
+					addVertex( currentPointL, u1, 0 );
+
+					addVertex( lastPointR, u0, 1 );
+					addVertex( currentPointL, u1, 0 );
+					addVertex( innerPoint, u1, 1 );
+
+					addVertex( currentPointL, u0, 0 );
+					addVertex( currentPoint, u1, 0.5 );
+					addVertex( innerPoint, u1, 1 );
+
+					addVertex( currentPoint, u1, 0.5 );
+					addVertex( nextPointL, u0, 0 );
+					addVertex( innerPoint, u1, 1 );
+
+				} else {
+
+					addVertex( lastPointR, u0, 1 );
+					addVertex( lastPointL, u0, 0 );
+					addVertex( currentPointR, u1, 1 );
+
+					addVertex( lastPointL, u0, 0 );
+					addVertex( innerPoint, u1, 0 );
+					addVertex( currentPointR, u1, 1 );
+
+					addVertex( currentPointR, u0, 1 );
+					addVertex( innerPoint, u1, 0 );
+					addVertex( currentPoint, u1, 0.5 );
+
+					addVertex( currentPoint, u1, 0.5 );
+					addVertex( innerPoint, u1, 0 );
+					addVertex( nextPointR, u0, 1 );
+
+				}
+
+			}
+
+		}
+
+		function addCapGeometry( center, p1, p2, joinIsOnLeftSide, start, u ) {
+
+			// param center: End point of the path
+			// param p1, p2: Left and right cap points
+
+			switch ( style.strokeLineCap ) {
+
+				case 'round':
+
+					if ( start ) {
+
+						makeCircularSector( center, p2, p1, u, 0.5 );
+
+					} else {
+
+						makeCircularSector( center, p1, p2, u, 0.5 );
+
+					}
+
+					break;
+
+				case 'square':
+
+					if ( start ) {
+
+						tempV2_1.subVectors( p1, center );
+						tempV2_2.set( tempV2_1.y, - tempV2_1.x );
+
+						tempV2_3.addVectors( tempV2_1, tempV2_2 ).add( center );
+						tempV2_4.subVectors( tempV2_2, tempV2_1 ).add( center );
+
+						// Modify already existing vertices
+						if ( joinIsOnLeftSide ) {
+
+							tempV2_3.toArray( vertices, 1 * 3 );
+							tempV2_4.toArray( vertices, 0 * 3 );
+							tempV2_4.toArray( vertices, 3 * 3 );
+
+						} else {
+
+							tempV2_3.toArray( vertices, 1 * 3 );
+							tempV2_3.toArray( vertices, 3 * 3 );
+							tempV2_4.toArray( vertices, 0 * 3 );
+
+						}
+
+					} else {
+
+						tempV2_1.subVectors( p2, center );
+						tempV2_2.set( tempV2_1.y, - tempV2_1.x );
+
+						tempV2_3.addVectors( tempV2_1, tempV2_2 ).add( center );
+						tempV2_4.subVectors( tempV2_2, tempV2_1 ).add( center );
+
+						var vl = vertices.length;
+
+						// Modify already existing vertices
+						if ( joinIsOnLeftSide ) {
+
+							tempV2_3.toArray( vertices, vl - 1 * 3 );
+							tempV2_4.toArray( vertices, vl - 2 * 3 );
+							tempV2_4.toArray( vertices, vl - 4 * 3 );
+
+						} else {
+
+							tempV2_3.toArray( vertices, vl - 2 * 3 );
+							tempV2_4.toArray( vertices, vl - 1 * 3 );
+							tempV2_4.toArray( vertices, vl - 4 * 3 );
+
+						}
+
+					}
+
+					break;
+
+			}
+
+		}
+
+		function removeDuplicatedPoints( points ) {
+
+			// Creates a new array if necessary with duplicated points removed.
+			// This does not remove duplicated initial and ending points of a closed path.
+
+			var dupPoints = false;
+			for ( var i = 1, n = points.length - 1; i < n; i ++ ) {
+
+				if ( points[ i ].distanceTo( points[ i + 1 ] ) < minDistance ) {
+
+					dupPoints = true;
+					break;
+
+				}
+
+			}
+
+			if ( ! dupPoints ) return points;
+
+			var newPoints = [];
+			newPoints.push( points[ 0 ] );
+
+			for ( var i = 1, n = points.length - 1; i < n; i ++ ) {
+
+				if ( points[ i ].distanceTo( points[ i + 1 ] ) >= minDistance ) {
+
+					newPoints.push( points[ i ] );
+
+				}
+
+			}
+
+			newPoints.push( points[ points.length - 1 ] );
+
+			return newPoints;
+
+		}
+
+	};
+
+}();
+
 function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
+const baseUrl = 'http://www.yanhuangxueyuan.com/threejs';
+
+class DemoSVGLoader extends Demo {
+  
+  
+  
+  
+
+  async init() {
+    this.svgLoader = new SVGLoader();
+    const svg = (await this.svgLoader.loadAsync(
+      baseUrl + '/examples/models/svg/tiger.svg',
+      // 'http://192.168.0.103:8080/test.svg'
+    )) ;
+    this.svgGroup = this.initSVG(svg);
+
+    this.helper = new GridHelper(160, 10);
+    this.helper.rotation.x = Math.PI / 2;
+
+    this.deps.scene.add(this.helper);
+    this.deps.scene.add(this.svgGroup);
+    this.deps.camera.position.set(0, 0, 200);
+
+    // init controls
+    this.orbitControl = new OrbitControls(
+      this.deps.camera,
+      this.deps.renderer.domElement,
+    );
+    this.orbitControl.enableDamping = true;
+    this.orbitControl.dampingFactor = 0.05;
+
+    this.deps.renderer.outputEncoding = LinearEncoding;
+  }
+
+  initSVG(svg) {
+    const guiData = {
+      drawFillShapes: true,
+      drawStrokes: true,
+      fillShapesWireframe: false,
+      strokesWireframe: false,
+    };
+
+    const { paths } = svg;
+    var group = new Group();
+    group.scale.multiplyScalar(0.25);
+    group.position.x = -70;
+    group.position.y = 70;
+    group.scale.y *= -1;
+
+    for (var i = 0; i < paths.length; i++) {
+      var path = paths[i];
+
+      var fillColor = path.userData.style.fill;
+      if (
+        
+        fillColor !== undefined &&
+        fillColor !== 'none'
+      ) {
+        var material = new MeshBasicMaterial({
+          color: new Color().setStyle(fillColor),
+          opacity: path.userData.style.fillOpacity,
+          transparent: path.userData.style.fillOpacity < 1,
+          side: DoubleSide,
+          depthWrite: false,
+          wireframe: guiData.fillShapesWireframe,
+        });
+
+        var shapes = path.toShapes(true);
+
+        for (var j = 0; j < shapes.length; j++) {
+          var shape = shapes[j];
+
+          var geometry = new ShapeBufferGeometry(shape);
+          var mesh = new Mesh(geometry, material);
+
+          group.add(mesh);
+        }
+      }
+
+      var strokeColor = path.userData.style.stroke;
+      if (
+        
+        strokeColor !== undefined &&
+        strokeColor !== 'none'
+      ) {
+        var material = new MeshBasicMaterial({
+          color: new Color().setStyle(strokeColor),
+          opacity: path.userData.style.strokeOpacity,
+          transparent: path.userData.style.strokeOpacity < 1,
+          side: DoubleSide,
+          depthWrite: false,
+          wireframe: guiData.strokesWireframe,
+        });
+
+        for (var j = 0, jl = path.subPaths.length; j < jl; j++) {
+          var subPath = path.subPaths[j];
+
+          var geometry = SVGLoader.pointsToStroke(
+            subPath.getPoints(),
+            path.userData.style,
+          );
+
+          if (geometry) {
+            var mesh = new Mesh(geometry, material);
+
+            group.add(mesh);
+          }
+        }
+      }
+    }
+
+    return group;
+  }
+
+  update() {
+    _optionalChain([this, 'access', _ => _.orbitControl, 'optionalAccess', _2 => _2.update, 'call', _3 => _3()]);
+  }
+
+  dispose() {
+    this.reset();
+    this.deps.renderer.outputEncoding = sRGBEncoding;
+    this.orbitControl.dispose();
+    this.deps.scene.remove(this.helper);
+    this.deps.scene.remove(this.svgGroup);
+    this.orbitControl = null;
+    this.svgGroup = null;
+    this.helper = null;
+    this.deps = null;
+  }
+}
+
+// https://github.com/mrdoob/three.js/issues/5552
+// http://en.wikipedia.org/wiki/RGBE_image_format
+
+var RGBELoader = function ( manager ) {
+
+	DataTextureLoader.call( this, manager );
+
+	this.type = UnsignedByteType;
+
+};
+
+RGBELoader.prototype = Object.assign( Object.create( DataTextureLoader.prototype ), {
+
+	constructor: RGBELoader,
+
+	// adapted from http://www.graphics.cornell.edu/~bjw/rgbe.html
+
+	parse: function ( buffer ) {
+
+		var
+			/* return codes for rgbe routines */
+			//RGBE_RETURN_SUCCESS = 0,
+			RGBE_RETURN_FAILURE = - 1,
+
+			/* default error routine.  change this to change error handling */
+			rgbe_read_error = 1,
+			rgbe_write_error = 2,
+			rgbe_format_error = 3,
+			rgbe_memory_error = 4,
+			rgbe_error = function ( rgbe_error_code, msg ) {
+
+				switch ( rgbe_error_code ) {
+
+					case rgbe_read_error: console.error( 'THREE.RGBELoader Read Error: ' + ( msg || '' ) );
+						break;
+					case rgbe_write_error: console.error( 'THREE.RGBELoader Write Error: ' + ( msg || '' ) );
+						break;
+					case rgbe_format_error: console.error( 'THREE.RGBELoader Bad File Format: ' + ( msg || '' ) );
+						break;
+					default:
+					case rgbe_memory_error: console.error( 'THREE.RGBELoader: Error: ' + ( msg || '' ) );
+
+				}
+
+				return RGBE_RETURN_FAILURE;
+
+			},
+
+			/* offsets to red, green, and blue components in a data (float) pixel */
+			//RGBE_DATA_RED = 0,
+			//RGBE_DATA_GREEN = 1,
+			//RGBE_DATA_BLUE = 2,
+
+			/* number of floats per pixel, use 4 since stored in rgba image format */
+			//RGBE_DATA_SIZE = 4,
+
+			/* flags indicating which fields in an rgbe_header_info are valid */
+			RGBE_VALID_PROGRAMTYPE = 1,
+			RGBE_VALID_FORMAT = 2,
+			RGBE_VALID_DIMENSIONS = 4,
+
+			NEWLINE = '\n',
+
+			fgets = function ( buffer, lineLimit, consume ) {
+
+				lineLimit = ! lineLimit ? 1024 : lineLimit;
+				var p = buffer.pos,
+					i = - 1, len = 0, s = '', chunkSize = 128,
+					chunk = String.fromCharCode.apply( null, new Uint16Array( buffer.subarray( p, p + chunkSize ) ) )
+				;
+				while ( ( 0 > ( i = chunk.indexOf( NEWLINE ) ) ) && ( len < lineLimit ) && ( p < buffer.byteLength ) ) {
+
+					s += chunk; len += chunk.length;
+					p += chunkSize;
+					chunk += String.fromCharCode.apply( null, new Uint16Array( buffer.subarray( p, p + chunkSize ) ) );
+
+				}
+
+				if ( - 1 < i ) {
+
+					/*for (i=l-1; i>=0; i--) {
+						byteCode = m.charCodeAt(i);
+						if (byteCode > 0x7f && byteCode <= 0x7ff) byteLen++;
+						else if (byteCode > 0x7ff && byteCode <= 0xffff) byteLen += 2;
+						if (byteCode >= 0xDC00 && byteCode <= 0xDFFF) i--; //trail surrogate
+					}*/
+					if ( false !== consume ) buffer.pos += len + i + 1;
+					return s + chunk.slice( 0, i );
+
+				}
+
+				return false;
+
+			},
+
+			/* minimal header reading.  modify if you want to parse more information */
+			RGBE_ReadHeader = function ( buffer ) {
+
+				var line, match,
+
+					// regexes to parse header info fields
+					magic_token_re = /^#\?(\S+)/,
+					gamma_re = /^\s*GAMMA\s*=\s*(\d+(\.\d+)?)\s*$/,
+					exposure_re = /^\s*EXPOSURE\s*=\s*(\d+(\.\d+)?)\s*$/,
+					format_re = /^\s*FORMAT=(\S+)\s*$/,
+					dimensions_re = /^\s*\-Y\s+(\d+)\s+\+X\s+(\d+)\s*$/,
+
+					// RGBE format header struct
+					header = {
+
+						valid: 0, /* indicate which fields are valid */
+
+						string: '', /* the actual header string */
+
+						comments: '', /* comments found in header */
+
+						programtype: 'RGBE', /* listed at beginning of file to identify it after "#?". defaults to "RGBE" */
+
+						format: '', /* RGBE format, default 32-bit_rle_rgbe */
+
+						gamma: 1.0, /* image has already been gamma corrected with given gamma. defaults to 1.0 (no correction) */
+
+						exposure: 1.0, /* a value of 1.0 in an image corresponds to <exposure> watts/steradian/m^2. defaults to 1.0 */
+
+						width: 0, height: 0 /* image dimensions, width/height */
+
+					};
+
+				if ( buffer.pos >= buffer.byteLength || ! ( line = fgets( buffer ) ) ) {
+
+					return rgbe_error( rgbe_read_error, 'no header found' );
+
+				}
+
+				/* if you want to require the magic token then uncomment the next line */
+				if ( ! ( match = line.match( magic_token_re ) ) ) {
+
+					return rgbe_error( rgbe_format_error, 'bad initial token' );
+
+				}
+
+				header.valid |= RGBE_VALID_PROGRAMTYPE;
+				header.programtype = match[ 1 ];
+				header.string += line + '\n';
+
+				while ( true ) {
+
+					line = fgets( buffer );
+					if ( false === line ) break;
+					header.string += line + '\n';
+
+					if ( '#' === line.charAt( 0 ) ) {
+
+						header.comments += line + '\n';
+						continue; // comment line
+
+					}
+
+					if ( match = line.match( gamma_re ) ) {
+
+						header.gamma = parseFloat( match[ 1 ], 10 );
+
+					}
+
+					if ( match = line.match( exposure_re ) ) {
+
+						header.exposure = parseFloat( match[ 1 ], 10 );
+
+					}
+
+					if ( match = line.match( format_re ) ) {
+
+						header.valid |= RGBE_VALID_FORMAT;
+						header.format = match[ 1 ];//'32-bit_rle_rgbe';
+
+					}
+
+					if ( match = line.match( dimensions_re ) ) {
+
+						header.valid |= RGBE_VALID_DIMENSIONS;
+						header.height = parseInt( match[ 1 ], 10 );
+						header.width = parseInt( match[ 2 ], 10 );
+
+					}
+
+					if ( ( header.valid & RGBE_VALID_FORMAT ) && ( header.valid & RGBE_VALID_DIMENSIONS ) ) break;
+
+				}
+
+				if ( ! ( header.valid & RGBE_VALID_FORMAT ) ) {
+
+					return rgbe_error( rgbe_format_error, 'missing format specifier' );
+
+				}
+
+				if ( ! ( header.valid & RGBE_VALID_DIMENSIONS ) ) {
+
+					return rgbe_error( rgbe_format_error, 'missing image size specifier' );
+
+				}
+
+				return header;
+
+			},
+
+			RGBE_ReadPixels_RLE = function ( buffer, w, h ) {
+
+				var data_rgba, offset, pos, count, byteValue,
+					scanline_buffer, ptr, ptr_end, i, l, off, isEncodedRun,
+					scanline_width = w, num_scanlines = h, rgbeStart
+				;
+
+				if (
+					// run length encoding is not allowed so read flat
+					( ( scanline_width < 8 ) || ( scanline_width > 0x7fff ) ) ||
+					// this file is not run length encoded
+					( ( 2 !== buffer[ 0 ] ) || ( 2 !== buffer[ 1 ] ) || ( buffer[ 2 ] & 0x80 ) )
+				) {
+
+					// return the flat buffer
+					return new Uint8Array( buffer );
+
+				}
+
+				if ( scanline_width !== ( ( buffer[ 2 ] << 8 ) | buffer[ 3 ] ) ) {
+
+					return rgbe_error( rgbe_format_error, 'wrong scanline width' );
+
+				}
+
+				data_rgba = new Uint8Array( 4 * w * h );
+
+				if ( ! data_rgba.length ) {
+
+					return rgbe_error( rgbe_memory_error, 'unable to allocate buffer space' );
+
+				}
+
+				offset = 0; pos = 0; ptr_end = 4 * scanline_width;
+				rgbeStart = new Uint8Array( 4 );
+				scanline_buffer = new Uint8Array( ptr_end );
+
+				// read in each successive scanline
+				while ( ( num_scanlines > 0 ) && ( pos < buffer.byteLength ) ) {
+
+					if ( pos + 4 > buffer.byteLength ) {
+
+						return rgbe_error( rgbe_read_error );
+
+					}
+
+					rgbeStart[ 0 ] = buffer[ pos ++ ];
+					rgbeStart[ 1 ] = buffer[ pos ++ ];
+					rgbeStart[ 2 ] = buffer[ pos ++ ];
+					rgbeStart[ 3 ] = buffer[ pos ++ ];
+
+					if ( ( 2 != rgbeStart[ 0 ] ) || ( 2 != rgbeStart[ 1 ] ) || ( ( ( rgbeStart[ 2 ] << 8 ) | rgbeStart[ 3 ] ) != scanline_width ) ) {
+
+						return rgbe_error( rgbe_format_error, 'bad rgbe scanline format' );
+
+					}
+
+					// read each of the four channels for the scanline into the buffer
+					// first red, then green, then blue, then exponent
+					ptr = 0;
+					while ( ( ptr < ptr_end ) && ( pos < buffer.byteLength ) ) {
+
+						count = buffer[ pos ++ ];
+						isEncodedRun = count > 128;
+						if ( isEncodedRun ) count -= 128;
+
+						if ( ( 0 === count ) || ( ptr + count > ptr_end ) ) {
+
+							return rgbe_error( rgbe_format_error, 'bad scanline data' );
+
+						}
+
+						if ( isEncodedRun ) {
+
+							// a (encoded) run of the same value
+							byteValue = buffer[ pos ++ ];
+							for ( i = 0; i < count; i ++ ) {
+
+								scanline_buffer[ ptr ++ ] = byteValue;
+
+							}
+							//ptr += count;
+
+						} else {
+
+							// a literal-run
+							scanline_buffer.set( buffer.subarray( pos, pos + count ), ptr );
+							ptr += count; pos += count;
+
+						}
+
+					}
+
+
+					// now convert data from buffer into rgba
+					// first red, then green, then blue, then exponent (alpha)
+					l = scanline_width; //scanline_buffer.byteLength;
+					for ( i = 0; i < l; i ++ ) {
+
+						off = 0;
+						data_rgba[ offset ] = scanline_buffer[ i + off ];
+						off += scanline_width; //1;
+						data_rgba[ offset + 1 ] = scanline_buffer[ i + off ];
+						off += scanline_width; //1;
+						data_rgba[ offset + 2 ] = scanline_buffer[ i + off ];
+						off += scanline_width; //1;
+						data_rgba[ offset + 3 ] = scanline_buffer[ i + off ];
+						offset += 4;
+
+					}
+
+					num_scanlines --;
+
+				}
+
+				return data_rgba;
+
+			};
+
+		var RGBEByteToRGBFloat = function ( sourceArray, sourceOffset, destArray, destOffset ) {
+
+			var e = sourceArray[ sourceOffset + 3 ];
+			var scale = Math.pow( 2.0, e - 128.0 ) / 255.0;
+
+			destArray[ destOffset + 0 ] = sourceArray[ sourceOffset + 0 ] * scale;
+			destArray[ destOffset + 1 ] = sourceArray[ sourceOffset + 1 ] * scale;
+			destArray[ destOffset + 2 ] = sourceArray[ sourceOffset + 2 ] * scale;
+
+		};
+
+		var RGBEByteToRGBHalf = function ( sourceArray, sourceOffset, destArray, destOffset ) {
+
+			var e = sourceArray[ sourceOffset + 3 ];
+			var scale = Math.pow( 2.0, e - 128.0 ) / 255.0;
+
+			destArray[ destOffset + 0 ] = DataUtils.toHalfFloat( sourceArray[ sourceOffset + 0 ] * scale );
+			destArray[ destOffset + 1 ] = DataUtils.toHalfFloat( sourceArray[ sourceOffset + 1 ] * scale );
+			destArray[ destOffset + 2 ] = DataUtils.toHalfFloat( sourceArray[ sourceOffset + 2 ] * scale );
+
+		};
+
+		var byteArray = new Uint8Array( buffer );
+		byteArray.pos = 0;
+		var rgbe_header_info = RGBE_ReadHeader( byteArray );
+
+		if ( RGBE_RETURN_FAILURE !== rgbe_header_info ) {
+
+			var w = rgbe_header_info.width,
+				h = rgbe_header_info.height,
+				image_rgba_data = RGBE_ReadPixels_RLE( byteArray.subarray( byteArray.pos ), w, h );
+
+			if ( RGBE_RETURN_FAILURE !== image_rgba_data ) {
+
+				switch ( this.type ) {
+
+					case UnsignedByteType:
+
+						var data = image_rgba_data;
+						var format = RGBEFormat; // handled as THREE.RGBAFormat in shaders
+						var type = UnsignedByteType;
+						break;
+
+					case FloatType:
+
+						var numElements = ( image_rgba_data.length / 4 ) * 3;
+						var floatArray = new Float32Array( numElements );
+
+						for ( var j = 0; j < numElements; j ++ ) {
+
+							RGBEByteToRGBFloat( image_rgba_data, j * 4, floatArray, j * 3 );
+
+						}
+
+						var data = floatArray;
+						var format = RGBFormat;
+						var type = FloatType;
+						break;
+
+					case HalfFloatType:
+
+						var numElements = ( image_rgba_data.length / 4 ) * 3;
+						var halfArray = new Uint16Array( numElements );
+
+						for ( var j = 0; j < numElements; j ++ ) {
+
+							RGBEByteToRGBHalf( image_rgba_data, j * 4, halfArray, j * 3 );
+
+						}
+
+						var data = halfArray;
+						var format = RGBFormat;
+						var type = HalfFloatType;
+						break;
+
+					default:
+
+						console.error( 'THREE.RGBELoader: unsupported type: ', this.type );
+						break;
+
+				}
+
+				return {
+					width: w, height: h,
+					data: data,
+					header: rgbe_header_info.string,
+					gamma: rgbe_header_info.gamma,
+					exposure: rgbe_header_info.exposure,
+					format: format,
+					type: type
+				};
+
+			}
+
+		}
+
+		return null;
+
+	},
+
+	setDataType: function ( value ) {
+
+		this.type = value;
+		return this;
+
+	},
+
+	load: function ( url, onLoad, onProgress, onError ) {
+
+		function onLoadCallback( texture, texData ) {
+
+			switch ( texture.type ) {
+
+				case UnsignedByteType:
+
+					texture.encoding = RGBEEncoding;
+					texture.minFilter = NearestFilter;
+					texture.magFilter = NearestFilter;
+					texture.generateMipmaps = false;
+					texture.flipY = true;
+					break;
+
+				case FloatType:
+
+					texture.encoding = LinearEncoding;
+					texture.minFilter = LinearFilter;
+					texture.magFilter = LinearFilter;
+					texture.generateMipmaps = false;
+					texture.flipY = true;
+					break;
+
+				case HalfFloatType:
+
+					texture.encoding = LinearEncoding;
+					texture.minFilter = LinearFilter;
+					texture.magFilter = LinearFilter;
+					texture.generateMipmaps = false;
+					texture.flipY = true;
+					break;
+
+			}
+
+			if ( onLoad ) onLoad( texture, texData );
+
+		}
+
+		return DataTextureLoader.prototype.load.call( this, url, onLoadCallback, onProgress, onError );
+
+	}
+
+} );
+
+function _optionalChain$1(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
+const baseUrl$1 = 'http://www.yanhuangxueyuan.com/threejs';
+
+class DemoRGBELoader extends Demo {
+  
+  
+  
+  
+  
+  
+
+  async init() {
+    const gltf = (await this.deps.gltfLoader.loadAsync(
+      baseUrl$1 + '/examples/models/gltf/MetalRoughSpheres/glTF/MetalRoughSpheres.gltf',
+    )) ;
+    this.gltf = gltf;
+
+    gltf.scene.rotation.copy(new Euler(0, 0, 0));
+    this.deps.renderer.physicallyCorrectLights = true;
+
+    // env map
+    this.rgbeLoader = new RGBELoader();
+    const pmremGenerator = new PMREMGenerator(this.deps.renderer);
+    pmremGenerator.compileEquirectangularShader();
+    const envTexture = (await this.rgbeLoader
+      .setDataType(UnsignedByteType)
+      .loadAsync(
+        baseUrl$1 + '/examples/textures/equirectangular/venice_sunset_2k.hdr',
+      )) ;
+    const envMap = pmremGenerator.fromEquirectangular(envTexture).texture;
+    envTexture.dispose();
+    pmremGenerator.dispose();
+    this.deps.scene.background = envMap;
+
+    // prettier-ignore
+    gltf.scene.traverse( function ( node ) {
+      // @ts-ignore
+      if ( node.material && ( node.material.isMeshStandardMaterial ||
+      // @ts-ignore
+         ( node.material.isShaderMaterial && node.material.envMap !== undefined ) ) ) {
+        // @ts-ignore
+        node.material.envMap = envMap;
+        // @ts-ignore
+        node.material.envMapIntensity = 1.5; // boombox seems too dark otherwise
+      }
+      // @ts-ignore
+      if ( node.isMesh || node.isLight ) node.castShadow = true;
+    } );
+
+    // lights
+    this.directionalLight = new DirectionalLight(0xdddddd, 4);
+    this.directionalLight.position.set(0, 0, 1).normalize();
+
+    this.ambientLight = new AmbientLight(0x222222);
+
+    this.spotLight = new SpotLight(0xffffff, 1);
+    this.spotLight.position.set(5, 10, 5);
+    this.spotLight.angle = 0.5;
+    this.spotLight.penumbra = 0.75;
+    this.spotLight.intensity = 100;
+    this.spotLight.decay = 2;
+
+    this.deps.scene.add(gltf.scene);
+    this.deps.scene.add(this.directionalLight);
+    this.deps.scene.add(this.ambientLight);
+    this.deps.scene.add(this.spotLight);
+
+    this.deps.camera.position.set(2, 1, 15);
+
+    // init controls
+    this.orbitControl = new OrbitControls(
+      this.deps.camera,
+      this.deps.renderer.domElement,
+    );
+    this.orbitControl.enableDamping = true;
+    this.orbitControl.dampingFactor = 0.05;
+  }
+
+  update() {
+    _optionalChain$1([this, 'access', _ => _.orbitControl, 'optionalAccess', _2 => _2.update, 'call', _3 => _3()]);
+  }
+
+  dispose() {
+    this.reset();
+    this.deps.renderer.physicallyCorrectLights = false;
+    (this.deps.scene.background ).dispose();
+    this.deps.scene.background = undefined;
+    this.orbitControl.dispose();
+    this.deps.scene.remove(this.gltf.scene);
+    this.deps.scene.remove(this.directionalLight);
+    this.deps.scene.remove(this.ambientLight);
+    this.deps.scene.remove(this.spotLight);
+    this.directionalLight = null;
+    this.ambientLight = null;
+    this.orbitControl = null;
+    this.spotLight = null;
+    this.deps = null;
+  }
+}
+
+function _optionalChain$2(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
 class DemoGLTFLoader extends Demo {
   
   
@@ -50967,8 +55145,8 @@ class DemoGLTFLoader extends Demo {
   }
 
   update() {
-    _optionalChain([this, 'access', _ => _.mixer, 'optionalAccess', _2 => _2.update, 'call', _3 => _3(this.deps.clock.getDelta())]);
-    _optionalChain([this, 'access', _4 => _4.orbitControl, 'optionalAccess', _5 => _5.update, 'call', _6 => _6()]);
+    _optionalChain$2([this, 'access', _ => _.mixer, 'optionalAccess', _2 => _2.update, 'call', _3 => _3(this.deps.clock.getDelta())]);
+    _optionalChain$2([this, 'access', _4 => _4.orbitControl, 'optionalAccess', _5 => _5.update, 'call', _6 => _6()]);
   }
 
   dispose() {
@@ -50987,7 +55165,7 @@ class DemoGLTFLoader extends Demo {
   }
 }
 
-function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } } function _optionalChain$1(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
+function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } } function _optionalChain$3(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
 
 class ThreeSpritePlayer {
    __init() {this.currFrame = 0;}
@@ -51068,7 +55246,7 @@ class ThreeSpritePlayer {
   }
 
    dispose() {
-    _optionalChain$1([this, 'access', _ => _.mesh, 'optionalAccess', _2 => _2.material, 'access', _3 => _3.dispose, 'call', _4 => _4()]);
+    _optionalChain$3([this, 'access', _ => _.mesh, 'optionalAccess', _2 => _2.material, 'access', _3 => _3.dispose, 'call', _4 => _4()]);
     this.tiles.forEach(texture => texture.dispose());
     this.tiles.length = 0;
     this.mesh = null;
@@ -51348,9 +55526,11 @@ class DemoDeviceOrientationControls extends Demo {
   }
 }
 
-function _optionalChain$2(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// index.ts
+function _optionalChain$4(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// index.ts
 
 const DEMO_MAP = {
+  SVGLoader: DemoSVGLoader,
+  RGBELoader: DemoRGBELoader,
   GLTFLoader: DemoGLTFLoader,
   ThreeSpritePlayer: DemoThreeSpritePlayer,
   DeviceOrientationControls: DemoDeviceOrientationControls
@@ -51372,6 +55552,8 @@ Page({
       'GLTFLoader',
       'ThreeSpritePlayer',
       'DeviceOrientationControls',
+      'RGBELoader',
+      'SVGLoader',
       'Raycaster',
       'Geometry'
     ]
@@ -51385,33 +55567,6 @@ Page({
     wx.createSelectorQuery().select('#gl').fields({ node: true, size: true }).exec((res) => {
       if (res[0]) this.initCanvas(res[0].node);
     });
-  },
-
-  onMenuClick() {
-    const showMenu = !this.data.showMenu;
-    if (showMenu) {
-      this.setData({ showMenu, showCanvas: false });
-    } else {
-      this.setData({ showMenu });
-      setTimeout(() => {
-        this.setData({ showCanvas: true });
-      }, 330);
-    }
-  },
-
-  async onMenuItemClick(e) {
-    if (this.switchingItem) return
-    _optionalChain$2([(this.currDemo ), 'optionalAccess', _ => _.dispose, 'call', _2 => _2()]);
-    this.switchingItem = true;
-    this.currDemo = null ;
-
-    const { i, item } = e.currentTarget.dataset;
-    const demo = new (DEMO_MAP[item])(this.deps) ;
-    await demo.init();
-    this.currDemo = demo;
-    this.setData({ currItem: i });
-    this.onMenuClick();
-    this.switchingItem = false;
   },
 
   initCanvas(canvas) {
@@ -51440,11 +55595,38 @@ Page({
     const render = () => {
       if (this.disposing) return
       $requestAnimationFrame(render);
-      _optionalChain$2([(this.currDemo ), 'optionalAccess', _3 => _3.update, 'call', _4 => _4()]);
+      _optionalChain$4([(this.currDemo ), 'optionalAccess', _ => _.update, 'call', _2 => _2()]);
       renderer.render(scene, camera);
     };
 
     render();
+  },
+
+  onMenuClick() {
+    const showMenu = !this.data.showMenu;
+    if (showMenu) {
+      this.setData({ showMenu, showCanvas: false });
+    } else {
+      this.setData({ showMenu });
+      setTimeout(() => {
+        this.setData({ showCanvas: true });
+      }, 330);
+    }
+  },
+
+  async onMenuItemClick(e) {
+    if (this.switchingItem) return
+    _optionalChain$4([(this.currDemo ), 'optionalAccess', _3 => _3.dispose, 'call', _4 => _4()]);
+    this.switchingItem = true;
+    this.currDemo = null ;
+
+    const { i, item } = e.currentTarget.dataset;
+    const demo = new (DEMO_MAP[item])(this.deps) ;
+    await demo.init();
+    this.currDemo = demo;
+    this.setData({ currItem: i });
+    this.onMenuClick();
+    this.switchingItem = false;
   },
 
   onTS(e) {
@@ -51455,13 +55637,13 @@ Page({
     this.platform.dispatchTouchEvent(e);
   },
 
-  onTE(e) { 
+  onTE(e) {
     this.platform.dispatchTouchEvent(e);
   },
 
   onUnload() {
     this.disposing = true;
-    _optionalChain$2([(this.currDemo ), 'optionalAccess', _5 => _5.dispose, 'call', _6 => _6()]);
+    _optionalChain$4([(this.currDemo ), 'optionalAccess', _5 => _5.dispose, 'call', _6 => _6()]);
     PLATFORM.dispose();
   }
 });
