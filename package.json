@@ -6,7 +6,8 @@
     "compile": "./node_modules/typescript/bin/tsc",
     "tsc": "node ./node_modules/typescript/lib/tsc.js",
     "dev": "rollup -w -c rollup.config.js",
-    "build": "rollup -c rollup.config.js"
+    "build": "rollup -c rollup.config.js",
+    "changelog": "conventional-changelog -p angular -i CHANGELOG.md -s -r 0"
   },
   "keywords": [],
   "author": "",

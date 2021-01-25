@@ -50978,907 +50978,6 @@ class Demo {
 
 }
 
-var OBJLoader = ( function () {
-
-	// o object_name | g group_name
-	var object_pattern = /^[og]\s*(.+)?/;
-	// mtllib file_reference
-	var material_library_pattern = /^mtllib /;
-	// usemtl material_name
-	var material_use_pattern = /^usemtl /;
-	// usemap map_name
-	var map_use_pattern = /^usemap /;
-
-	var vA = new Vector3();
-	var vB = new Vector3();
-	var vC = new Vector3();
-
-	var ab = new Vector3();
-	var cb = new Vector3();
-
-	function ParserState() {
-
-		var state = {
-			objects: [],
-			object: {},
-
-			vertices: [],
-			normals: [],
-			colors: [],
-			uvs: [],
-
-			materials: {},
-			materialLibraries: [],
-
-			startObject: function ( name, fromDeclaration ) {
-
-				// If the current object (initial from reset) is not from a g/o declaration in the parsed
-				// file. We need to use it for the first parsed g/o to keep things in sync.
-				if ( this.object && this.object.fromDeclaration === false ) {
-
-					this.object.name = name;
-					this.object.fromDeclaration = ( fromDeclaration !== false );
-					return;
-
-				}
-
-				var previousMaterial = ( this.object && typeof this.object.currentMaterial === 'function' ? this.object.currentMaterial() : undefined );
-
-				if ( this.object && typeof this.object._finalize === 'function' ) {
-
-					this.object._finalize( true );
-
-				}
-
-				this.object = {
-					name: name || '',
-					fromDeclaration: ( fromDeclaration !== false ),
-
-					geometry: {
-						vertices: [],
-						normals: [],
-						colors: [],
-						uvs: [],
-						hasUVIndices: false
-					},
-					materials: [],
-					smooth: true,
-
-					startMaterial: function ( name, libraries ) {
-
-						var previous = this._finalize( false );
-
-						// New usemtl declaration overwrites an inherited material, except if faces were declared
-						// after the material, then it must be preserved for proper MultiMaterial continuation.
-						if ( previous && ( previous.inherited || previous.groupCount <= 0 ) ) {
-
-							this.materials.splice( previous.index, 1 );
-
-						}
-
-						var material = {
-							index: this.materials.length,
-							name: name || '',
-							mtllib: ( Array.isArray( libraries ) && libraries.length > 0 ? libraries[ libraries.length - 1 ] : '' ),
-							smooth: ( previous !== undefined ? previous.smooth : this.smooth ),
-							groupStart: ( previous !== undefined ? previous.groupEnd : 0 ),
-							groupEnd: - 1,
-							groupCount: - 1,
-							inherited: false,
-
-							clone: function ( index ) {
-
-								var cloned = {
-									index: ( typeof index === 'number' ? index : this.index ),
-									name: this.name,
-									mtllib: this.mtllib,
-									smooth: this.smooth,
-									groupStart: 0,
-									groupEnd: - 1,
-									groupCount: - 1,
-									inherited: false
-								};
-								cloned.clone = this.clone.bind( cloned );
-								return cloned;
-
-							}
-						};
-
-						this.materials.push( material );
-
-						return material;
-
-					},
-
-					currentMaterial: function () {
-
-						if ( this.materials.length > 0 ) {
-
-							return this.materials[ this.materials.length - 1 ];
-
-						}
-
-						return undefined;
-
-					},
-
-					_finalize: function ( end ) {
-
-						var lastMultiMaterial = this.currentMaterial();
-						if ( lastMultiMaterial && lastMultiMaterial.groupEnd === - 1 ) {
-
-							lastMultiMaterial.groupEnd = this.geometry.vertices.length / 3;
-							lastMultiMaterial.groupCount = lastMultiMaterial.groupEnd - lastMultiMaterial.groupStart;
-							lastMultiMaterial.inherited = false;
-
-						}
-
-						// Ignore objects tail materials if no face declarations followed them before a new o/g started.
-						if ( end && this.materials.length > 1 ) {
-
-							for ( var mi = this.materials.length - 1; mi >= 0; mi -- ) {
-
-								if ( this.materials[ mi ].groupCount <= 0 ) {
-
-									this.materials.splice( mi, 1 );
-
-								}
-
-							}
-
-						}
-
-						// Guarantee at least one empty material, this makes the creation later more straight forward.
-						if ( end && this.materials.length === 0 ) {
-
-							this.materials.push( {
-								name: '',
-								smooth: this.smooth
-							} );
-
-						}
-
-						return lastMultiMaterial;
-
-					}
-				};
-
-				// Inherit previous objects material.
-				// Spec tells us that a declared material must be set to all objects until a new material is declared.
-				// If a usemtl declaration is encountered while this new object is being parsed, it will
-				// overwrite the inherited material. Exception being that there was already face declarations
-				// to the inherited material, then it will be preserved for proper MultiMaterial continuation.
-
-				if ( previousMaterial && previousMaterial.name && typeof previousMaterial.clone === 'function' ) {
-
-					var declared = previousMaterial.clone( 0 );
-					declared.inherited = true;
-					this.object.materials.push( declared );
-
-				}
-
-				this.objects.push( this.object );
-
-			},
-
-			finalize: function () {
-
-				if ( this.object && typeof this.object._finalize === 'function' ) {
-
-					this.object._finalize( true );
-
-				}
-
-			},
-
-			parseVertexIndex: function ( value, len ) {
-
-				var index = parseInt( value, 10 );
-				return ( index >= 0 ? index - 1 : index + len / 3 ) * 3;
-
-			},
-
-			parseNormalIndex: function ( value, len ) {
-
-				var index = parseInt( value, 10 );
-				return ( index >= 0 ? index - 1 : index + len / 3 ) * 3;
-
-			},
-
-			parseUVIndex: function ( value, len ) {
-
-				var index = parseInt( value, 10 );
-				return ( index >= 0 ? index - 1 : index + len / 2 ) * 2;
-
-			},
-
-			addVertex: function ( a, b, c ) {
-
-				var src = this.vertices;
-				var dst = this.object.geometry.vertices;
-
-				dst.push( src[ a + 0 ], src[ a + 1 ], src[ a + 2 ] );
-				dst.push( src[ b + 0 ], src[ b + 1 ], src[ b + 2 ] );
-				dst.push( src[ c + 0 ], src[ c + 1 ], src[ c + 2 ] );
-
-			},
-
-			addVertexPoint: function ( a ) {
-
-				var src = this.vertices;
-				var dst = this.object.geometry.vertices;
-
-				dst.push( src[ a + 0 ], src[ a + 1 ], src[ a + 2 ] );
-
-			},
-
-			addVertexLine: function ( a ) {
-
-				var src = this.vertices;
-				var dst = this.object.geometry.vertices;
-
-				dst.push( src[ a + 0 ], src[ a + 1 ], src[ a + 2 ] );
-
-			},
-
-			addNormal: function ( a, b, c ) {
-
-				var src = this.normals;
-				var dst = this.object.geometry.normals;
-
-				dst.push( src[ a + 0 ], src[ a + 1 ], src[ a + 2 ] );
-				dst.push( src[ b + 0 ], src[ b + 1 ], src[ b + 2 ] );
-				dst.push( src[ c + 0 ], src[ c + 1 ], src[ c + 2 ] );
-
-			},
-
-			addFaceNormal: function ( a, b, c ) {
-
-				var src = this.vertices;
-				var dst = this.object.geometry.normals;
-
-				vA.fromArray( src, a );
-				vB.fromArray( src, b );
-				vC.fromArray( src, c );
-
-				cb.subVectors( vC, vB );
-				ab.subVectors( vA, vB );
-				cb.cross( ab );
-
-				cb.normalize();
-
-				dst.push( cb.x, cb.y, cb.z );
-				dst.push( cb.x, cb.y, cb.z );
-				dst.push( cb.x, cb.y, cb.z );
-
-			},
-
-			addColor: function ( a, b, c ) {
-
-				var src = this.colors;
-				var dst = this.object.geometry.colors;
-
-				if ( src[ a ] !== undefined ) dst.push( src[ a + 0 ], src[ a + 1 ], src[ a + 2 ] );
-				if ( src[ b ] !== undefined ) dst.push( src[ b + 0 ], src[ b + 1 ], src[ b + 2 ] );
-				if ( src[ c ] !== undefined ) dst.push( src[ c + 0 ], src[ c + 1 ], src[ c + 2 ] );
-
-			},
-
-			addUV: function ( a, b, c ) {
-
-				var src = this.uvs;
-				var dst = this.object.geometry.uvs;
-
-				dst.push( src[ a + 0 ], src[ a + 1 ] );
-				dst.push( src[ b + 0 ], src[ b + 1 ] );
-				dst.push( src[ c + 0 ], src[ c + 1 ] );
-
-			},
-
-			addDefaultUV: function () {
-
-				var dst = this.object.geometry.uvs;
-
-				dst.push( 0, 0 );
-				dst.push( 0, 0 );
-				dst.push( 0, 0 );
-
-			},
-
-			addUVLine: function ( a ) {
-
-				var src = this.uvs;
-				var dst = this.object.geometry.uvs;
-
-				dst.push( src[ a + 0 ], src[ a + 1 ] );
-
-			},
-
-			addFace: function ( a, b, c, ua, ub, uc, na, nb, nc ) {
-
-				var vLen = this.vertices.length;
-
-				var ia = this.parseVertexIndex( a, vLen );
-				var ib = this.parseVertexIndex( b, vLen );
-				var ic = this.parseVertexIndex( c, vLen );
-
-				this.addVertex( ia, ib, ic );
-				this.addColor( ia, ib, ic );
-
-				// normals
-
-				if ( na !== undefined && na !== '' ) {
-
-					var nLen = this.normals.length;
-
-					ia = this.parseNormalIndex( na, nLen );
-					ib = this.parseNormalIndex( nb, nLen );
-					ic = this.parseNormalIndex( nc, nLen );
-
-					this.addNormal( ia, ib, ic );
-
-				} else {
-
-					this.addFaceNormal( ia, ib, ic );
-
-				}
-
-				// uvs
-
-				if ( ua !== undefined && ua !== '' ) {
-
-					var uvLen = this.uvs.length;
-
-					ia = this.parseUVIndex( ua, uvLen );
-					ib = this.parseUVIndex( ub, uvLen );
-					ic = this.parseUVIndex( uc, uvLen );
-
-					this.addUV( ia, ib, ic );
-
-					this.object.geometry.hasUVIndices = true;
-
-				} else {
-
-					// add placeholder values (for inconsistent face definitions)
-
-					this.addDefaultUV();
-
-				}
-
-			},
-
-			addPointGeometry: function ( vertices ) {
-
-				this.object.geometry.type = 'Points';
-
-				var vLen = this.vertices.length;
-
-				for ( var vi = 0, l = vertices.length; vi < l; vi ++ ) {
-
-					var index = this.parseVertexIndex( vertices[ vi ], vLen );
-
-					this.addVertexPoint( index );
-					this.addColor( index );
-
-				}
-
-			},
-
-			addLineGeometry: function ( vertices, uvs ) {
-
-				this.object.geometry.type = 'Line';
-
-				var vLen = this.vertices.length;
-				var uvLen = this.uvs.length;
-
-				for ( var vi = 0, l = vertices.length; vi < l; vi ++ ) {
-
-					this.addVertexLine( this.parseVertexIndex( vertices[ vi ], vLen ) );
-
-				}
-
-				for ( var uvi = 0, l = uvs.length; uvi < l; uvi ++ ) {
-
-					this.addUVLine( this.parseUVIndex( uvs[ uvi ], uvLen ) );
-
-				}
-
-			}
-
-		};
-
-		state.startObject( '', false );
-
-		return state;
-
-	}
-
-	//
-
-	function OBJLoader( manager ) {
-
-		Loader.call( this, manager );
-
-		this.materials = null;
-
-	}
-
-	OBJLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
-
-		constructor: OBJLoader,
-
-		load: function ( url, onLoad, onProgress, onError ) {
-
-			var scope = this;
-
-			var loader = new FileLoader( this.manager );
-			loader.setPath( this.path );
-			loader.setRequestHeader( this.requestHeader );
-			loader.setWithCredentials( this.withCredentials );
-			loader.load( url, function ( text ) {
-
-				try {
-
-					onLoad( scope.parse( text ) );
-
-				} catch ( e ) {
-
-					if ( onError ) {
-
-						onError( e );
-
-					} else {
-
-						console.error( e );
-
-					}
-
-					scope.manager.itemError( url );
-
-				}
-
-			}, onProgress, onError );
-
-		},
-
-		setMaterials: function ( materials ) {
-
-			this.materials = materials;
-
-			return this;
-
-		},
-
-		parse: function ( text ) {
-
-			var state = new ParserState();
-
-			if ( text.indexOf( '\r\n' ) !== - 1 ) {
-
-				// This is faster than String.split with regex that splits on both
-				text = text.replace( /\r\n/g, '\n' );
-
-			}
-
-			if ( text.indexOf( '\\\n' ) !== - 1 ) {
-
-				// join lines separated by a line continuation character (\)
-				text = text.replace( /\\\n/g, '' );
-
-			}
-
-			var lines = text.split( '\n' );
-			var line = '', lineFirstChar = '';
-			var lineLength = 0;
-			var result = [];
-
-			// Faster to just trim left side of the line. Use if available.
-			var trimLeft = ( typeof ''.trimLeft === 'function' );
-
-			for ( var i = 0, l = lines.length; i < l; i ++ ) {
-
-				line = lines[ i ];
-
-				line = trimLeft ? line.trimLeft() : line.trim();
-
-				lineLength = line.length;
-
-				if ( lineLength === 0 ) continue;
-
-				lineFirstChar = line.charAt( 0 );
-
-				// @todo invoke passed in handler if any
-				if ( lineFirstChar === '#' ) continue;
-
-				if ( lineFirstChar === 'v' ) {
-
-					var data = line.split( /\s+/ );
-
-					switch ( data[ 0 ] ) {
-
-						case 'v':
-							state.vertices.push(
-								parseFloat( data[ 1 ] ),
-								parseFloat( data[ 2 ] ),
-								parseFloat( data[ 3 ] )
-							);
-							if ( data.length >= 7 ) {
-
-								state.colors.push(
-									parseFloat( data[ 4 ] ),
-									parseFloat( data[ 5 ] ),
-									parseFloat( data[ 6 ] )
-
-								);
-
-							} else {
-
-								// if no colors are defined, add placeholders so color and vertex indices match
-
-								state.colors.push( undefined, undefined, undefined );
-
-							}
-
-							break;
-						case 'vn':
-							state.normals.push(
-								parseFloat( data[ 1 ] ),
-								parseFloat( data[ 2 ] ),
-								parseFloat( data[ 3 ] )
-							);
-							break;
-						case 'vt':
-							state.uvs.push(
-								parseFloat( data[ 1 ] ),
-								parseFloat( data[ 2 ] )
-							);
-							break;
-
-					}
-
-				} else if ( lineFirstChar === 'f' ) {
-
-					var lineData = line.substr( 1 ).trim();
-					var vertexData = lineData.split( /\s+/ );
-					var faceVertices = [];
-
-					// Parse the face vertex data into an easy to work with format
-
-					for ( var j = 0, jl = vertexData.length; j < jl; j ++ ) {
-
-						var vertex = vertexData[ j ];
-
-						if ( vertex.length > 0 ) {
-
-							var vertexParts = vertex.split( '/' );
-							faceVertices.push( vertexParts );
-
-						}
-
-					}
-
-					// Draw an edge between the first vertex and all subsequent vertices to form an n-gon
-
-					var v1 = faceVertices[ 0 ];
-
-					for ( var j = 1, jl = faceVertices.length - 1; j < jl; j ++ ) {
-
-						var v2 = faceVertices[ j ];
-						var v3 = faceVertices[ j + 1 ];
-
-						state.addFace(
-							v1[ 0 ], v2[ 0 ], v3[ 0 ],
-							v1[ 1 ], v2[ 1 ], v3[ 1 ],
-							v1[ 2 ], v2[ 2 ], v3[ 2 ]
-						);
-
-					}
-
-				} else if ( lineFirstChar === 'l' ) {
-
-					var lineParts = line.substring( 1 ).trim().split( ' ' );
-					var lineVertices = [], lineUVs = [];
-
-					if ( line.indexOf( '/' ) === - 1 ) {
-
-						lineVertices = lineParts;
-
-					} else {
-
-						for ( var li = 0, llen = lineParts.length; li < llen; li ++ ) {
-
-							var parts = lineParts[ li ].split( '/' );
-
-							if ( parts[ 0 ] !== '' ) lineVertices.push( parts[ 0 ] );
-							if ( parts[ 1 ] !== '' ) lineUVs.push( parts[ 1 ] );
-
-						}
-
-					}
-
-					state.addLineGeometry( lineVertices, lineUVs );
-
-				} else if ( lineFirstChar === 'p' ) {
-
-					var lineData = line.substr( 1 ).trim();
-					var pointData = lineData.split( ' ' );
-
-					state.addPointGeometry( pointData );
-
-				} else if ( ( result = object_pattern.exec( line ) ) !== null ) {
-
-					// o object_name
-					// or
-					// g group_name
-
-					// WORKAROUND: https://bugs.chromium.org/p/v8/issues/detail?id=2869
-					// var name = result[ 0 ].substr( 1 ).trim();
-					var name = ( ' ' + result[ 0 ].substr( 1 ).trim() ).substr( 1 );
-
-					state.startObject( name );
-
-				} else if ( material_use_pattern.test( line ) ) {
-
-					// material
-
-					state.object.startMaterial( line.substring( 7 ).trim(), state.materialLibraries );
-
-				} else if ( material_library_pattern.test( line ) ) {
-
-					// mtl file
-
-					state.materialLibraries.push( line.substring( 7 ).trim() );
-
-				} else if ( map_use_pattern.test( line ) ) {
-
-					// the line is parsed but ignored since the loader assumes textures are defined MTL files
-					// (according to https://www.okino.com/conv/imp_wave.htm, 'usemap' is the old-style Wavefront texture reference method)
-
-					console.warn( 'THREE.OBJLoader: Rendering identifier "usemap" not supported. Textures must be defined in MTL files.' );
-
-				} else if ( lineFirstChar === 's' ) {
-
-					result = line.split( ' ' );
-
-					// smooth shading
-
-					// @todo Handle files that have varying smooth values for a set of faces inside one geometry,
-					// but does not define a usemtl for each face set.
-					// This should be detected and a dummy material created (later MultiMaterial and geometry groups).
-					// This requires some care to not create extra material on each smooth value for "normal" obj files.
-					// where explicit usemtl defines geometry groups.
-					// Example asset: examples/models/obj/cerberus/Cerberus.obj
-
-					/*
-					 * http://paulbourke.net/dataformats/obj/
-					 * or
-					 * http://www.cs.utah.edu/~boulos/cs3505/obj_spec.pdf
-					 *
-					 * From chapter "Grouping" Syntax explanation "s group_number":
-					 * "group_number is the smoothing group number. To turn off smoothing groups, use a value of 0 or off.
-					 * Polygonal elements use group numbers to put elements in different smoothing groups. For free-form
-					 * surfaces, smoothing groups are either turned on or off; there is no difference between values greater
-					 * than 0."
-					 */
-					if ( result.length > 1 ) {
-
-						var value = result[ 1 ].trim().toLowerCase();
-						state.object.smooth = ( value !== '0' && value !== 'off' );
-
-					} else {
-
-						// ZBrush can produce "s" lines #11707
-						state.object.smooth = true;
-
-					}
-
-					var material = state.object.currentMaterial();
-					if ( material ) material.smooth = state.object.smooth;
-
-				} else {
-
-					// Handle null terminated files without exception
-					if ( line === '\0' ) continue;
-
-					console.warn( 'THREE.OBJLoader: Unexpected line: "' + line + '"' );
-
-				}
-
-			}
-
-			state.finalize();
-
-			var container = new Group();
-			container.materialLibraries = [].concat( state.materialLibraries );
-
-			var hasPrimitives = ! ( state.objects.length === 1 && state.objects[ 0 ].geometry.vertices.length === 0 );
-
-			if ( hasPrimitives === true ) {
-
-				for ( var i = 0, l = state.objects.length; i < l; i ++ ) {
-
-					var object = state.objects[ i ];
-					var geometry = object.geometry;
-					var materials = object.materials;
-					var isLine = ( geometry.type === 'Line' );
-					var isPoints = ( geometry.type === 'Points' );
-					var hasVertexColors = false;
-
-					// Skip o/g line declarations that did not follow with any faces
-					if ( geometry.vertices.length === 0 ) continue;
-
-					var buffergeometry = new BufferGeometry();
-
-					buffergeometry.setAttribute( 'position', new Float32BufferAttribute( geometry.vertices, 3 ) );
-
-					if ( geometry.normals.length > 0 ) {
-
-						buffergeometry.setAttribute( 'normal', new Float32BufferAttribute( geometry.normals, 3 ) );
-
-					}
-
-					if ( geometry.colors.length > 0 ) {
-
-						hasVertexColors = true;
-						buffergeometry.setAttribute( 'color', new Float32BufferAttribute( geometry.colors, 3 ) );
-
-					}
-
-					if ( geometry.hasUVIndices === true ) {
-
-						buffergeometry.setAttribute( 'uv', new Float32BufferAttribute( geometry.uvs, 2 ) );
-
-					}
-
-					// Create materials
-
-					var createdMaterials = [];
-
-					for ( var mi = 0, miLen = materials.length; mi < miLen; mi ++ ) {
-
-						var sourceMaterial = materials[ mi ];
-						var materialHash = sourceMaterial.name + '_' + sourceMaterial.smooth + '_' + hasVertexColors;
-						var material = state.materials[ materialHash ];
-
-						if ( this.materials !== null ) {
-
-							material = this.materials.create( sourceMaterial.name );
-
-							// mtl etc. loaders probably can't create line materials correctly, copy properties to a line material.
-							if ( isLine && material && ! ( material instanceof LineBasicMaterial ) ) {
-
-								var materialLine = new LineBasicMaterial();
-								Material.prototype.copy.call( materialLine, material );
-								materialLine.color.copy( material.color );
-								material = materialLine;
-
-							} else if ( isPoints && material && ! ( material instanceof PointsMaterial ) ) {
-
-								var materialPoints = new PointsMaterial( { size: 10, sizeAttenuation: false } );
-								Material.prototype.copy.call( materialPoints, material );
-								materialPoints.color.copy( material.color );
-								materialPoints.map = material.map;
-								material = materialPoints;
-
-							}
-
-						}
-
-						if ( material === undefined ) {
-
-							if ( isLine ) {
-
-								material = new LineBasicMaterial();
-
-							} else if ( isPoints ) {
-
-								material = new PointsMaterial( { size: 1, sizeAttenuation: false } );
-
-							} else {
-
-								material = new MeshPhongMaterial();
-
-							}
-
-							material.name = sourceMaterial.name;
-							material.flatShading = sourceMaterial.smooth ? false : true;
-							material.vertexColors = hasVertexColors;
-
-							state.materials[ materialHash ] = material;
-
-						}
-
-						createdMaterials.push( material );
-
-					}
-
-					// Create mesh
-
-					var mesh;
-
-					if ( createdMaterials.length > 1 ) {
-
-						for ( var mi = 0, miLen = materials.length; mi < miLen; mi ++ ) {
-
-							var sourceMaterial = materials[ mi ];
-							buffergeometry.addGroup( sourceMaterial.groupStart, sourceMaterial.groupCount, mi );
-
-						}
-
-						if ( isLine ) {
-
-							mesh = new LineSegments( buffergeometry, createdMaterials );
-
-						} else if ( isPoints ) {
-
-							mesh = new Points( buffergeometry, createdMaterials );
-
-						} else {
-
-							mesh = new Mesh( buffergeometry, createdMaterials );
-
-						}
-
-					} else {
-
-						if ( isLine ) {
-
-							mesh = new LineSegments( buffergeometry, createdMaterials[ 0 ] );
-
-						} else if ( isPoints ) {
-
-							mesh = new Points( buffergeometry, createdMaterials[ 0 ] );
-
-						} else {
-
-							mesh = new Mesh( buffergeometry, createdMaterials[ 0 ] );
-
-						}
-
-					}
-
-					mesh.name = object.name;
-
-					container.add( mesh );
-
-				}
-
-			} else {
-
-				// if there is only the default parser state object with no geometry data, interpret data as point cloud
-
-				if ( state.vertices.length > 0 ) {
-
-					var material = new PointsMaterial( { size: 1, sizeAttenuation: false } );
-
-					var buffergeometry = new BufferGeometry();
-
-					buffergeometry.setAttribute( 'position', new Float32BufferAttribute( state.vertices, 3 ) );
-
-					if ( state.colors.length > 0 && state.colors[ 0 ] !== undefined ) {
-
-						buffergeometry.setAttribute( 'color', new Float32BufferAttribute( state.colors, 3 ) );
-						material.vertexColors = true;
-
-					}
-
-					var points = new Points( buffergeometry, material );
-					container.add( points );
-
-				}
-
-			}
-
-			return container;
-
-		}
-
-	} );
-
-	return OBJLoader;
-
-} )();
-
 // This set of controls performs orbiting, dollying (zooming), and panning.
 // Unlike TrackballControls, it maintains the "up" direction object.up (+Y by default).
 //
@@ -53071,6 +52170,1074 @@ var MapControls = function ( object, domElement ) {
 MapControls.prototype = Object.create( EventDispatcher.prototype );
 MapControls.prototype.constructor = MapControls;
 
+// This file is part of meshoptimizer library and is distributed under the terms of MIT License.
+// Copyright (C) 2016-2020, by Arseny Kapoulkine (arseny.kapoulkine@gmail.com)
+var MeshoptDecoder = (function() {
+
+	// Built with clang version 11.0.0 (https://github.com/llvm/llvm-project 176249bd6732a8044d457092ed932768724a6f06)
+	// Built from meshoptimizer 0.15
+	var wasm_base = "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";
+	var wasm_simd = "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";
+
+	// Uses bulk-memory and simd extensions
+	var detector = new Uint8Array([0,97,115,109,1,0,0,0,1,4,1,96,0,0,3,3,2,0,0,5,3,1,0,1,12,1,0,10,22,2,12,0,65,0,65,0,65,0,252,10,0,0,11,7,0,65,0,253,15,26,11]);
+
+	// Used to unpack wasm
+	var wasmpack = new Uint8Array([32,0,65,253,3,1,2,34,4,106,6,5,11,8,7,20,13,33,12,16,128,9,116,64,19,113,127,15,10,21,22,14,255,66,24,54,136,107,18,23,192,26,114,118,132,17,77,101,130,144,27,87,131,44,45,74,156,154,70,167]);
+
+	if (typeof WebAssembly !== 'object') {
+		// This module requires WebAssembly to function
+		return {
+			supported: false,
+		};
+	}
+
+	var wasm = wasm_base;
+
+	if (WebAssembly.validate(detector)) {
+		wasm = wasm_simd;
+		console.log("Warning: meshopt_decoder is using experimental SIMD support");
+	}
+
+	var instance;
+
+	var promise =
+		WebAssembly.instantiate(unpack(wasm), {})
+		.then(function(result) {
+			instance = result.instance;
+			instance.exports.__wasm_call_ctors();
+		});
+
+	function unpack(data) {
+		var result = new Uint8Array(data.length);
+		for (var i = 0; i < data.length; ++i) {
+			var ch = data.charCodeAt(i);
+			result[i] = ch > 96 ? ch - 71 : ch > 64 ? ch - 65 : ch > 47 ? ch + 4 : ch > 46 ? 63 : 62;
+		}
+		var write = 0;
+		for (var i = 0; i < data.length; ++i) {
+			result[write++] = (result[i] < 60) ? wasmpack[result[i]] : (result[i] - 60) * 64 + result[++i];
+		}
+		return result.buffer.slice(0, write);
+	}
+
+	function decode(fun, target, count, size, source, filter) {
+		var sbrk = instance.exports.sbrk;
+		var count4 = (count + 3) & ~3; // pad for SIMD filter
+		var tp = sbrk(count4 * size);
+		var sp = sbrk(source.length);
+		var heap = new Uint8Array(instance.exports.memory.buffer);
+		heap.set(source, sp);
+		var res = fun(tp, count, size, sp, source.length);
+		if (res == 0 && filter) {
+			filter(tp, count4, size);
+		}
+		target.set(heap.subarray(tp, tp + count * size));
+		sbrk(tp - sbrk(0));
+		if (res != 0) {
+			throw new Error("Malformed buffer data: " + res);
+		}
+	}
+	var filters = {
+		// legacy index-based enums for glTF
+		0: "",
+		1: "meshopt_decodeFilterOct",
+		2: "meshopt_decodeFilterQuat",
+		3: "meshopt_decodeFilterExp",
+		// string-based enums for glTF
+		NONE: "",
+		OCTAHEDRAL: "meshopt_decodeFilterOct",
+		QUATERNION: "meshopt_decodeFilterQuat",
+		EXPONENTIAL: "meshopt_decodeFilterExp",
+	};
+
+	var decoders = {
+		// legacy index-based enums for glTF
+		0: "meshopt_decodeVertexBuffer",
+		1: "meshopt_decodeIndexBuffer",
+		2: "meshopt_decodeIndexSequence",
+		// string-based enums for glTF
+		ATTRIBUTES: "meshopt_decodeVertexBuffer",
+		TRIANGLES: "meshopt_decodeIndexBuffer",
+		INDICES: "meshopt_decodeIndexSequence",
+	};
+
+	return {
+		ready: promise,
+		supported: true,
+		decodeVertexBuffer: function(target, count, size, source, filter) {
+			decode(instance.exports.meshopt_decodeVertexBuffer, target, count, size, source, instance.exports[filters[filter]]);
+		},
+		decodeIndexBuffer: function(target, count, size, source) {
+			decode(instance.exports.meshopt_decodeIndexBuffer, target, count, size, source);
+		},
+		decodeIndexSequence: function(target, count, size, source) {
+			decode(instance.exports.meshopt_decodeIndexSequence, target, count, size, source);
+		},
+		decodeGltfBuffer: function(target, count, size, source, mode, filter) {
+			decode(instance.exports[decoders[mode]], target, count, size, source, instance.exports[filters[filter]]);
+		}
+	};
+})();
+
+function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
+class DemoMeshOpt extends Demo {
+  
+  
+  
+  
+
+  async init() {
+    this.deps.gltfLoader.setMeshoptDecoder(MeshoptDecoder);
+
+    const gltf = (await this.deps.gltfLoader.loadAsync(
+      'https://meshoptimizer.org/demo/pirate.glb',
+    )) ;
+
+    this.gltf = gltf;
+    this.ambientLight = new AmbientLight(0xcccccc, 0.3);
+    this.pointLight = new PointLight(0xffffff, 0.8);
+    this.pointLight.position.set(3, 3, 0);
+
+    this.deps.scene.add(gltf.scene);
+    this.deps.scene.add(this.ambientLight);
+    this.deps.camera.add(this.pointLight);
+    this.deps.scene.add(this.deps.camera);
+    gltf.scene.position.y = -1;
+    this.deps.camera.position.y = 1.0;
+    this.deps.camera.position.z = 3.0;
+    this.deps.scene.position.z = 0;
+    this.deps.scene.background = new Color(0x300a24);
+
+    // init controls
+    this.orbitControl = new OrbitControls(
+      this.deps.camera,
+      this.deps.renderer.domElement,
+    );
+    this.orbitControl.enableDamping = true;
+    this.orbitControl.dampingFactor = 0.05;
+  }
+
+  update() {
+    _optionalChain([this, 'access', _ => _.orbitControl, 'optionalAccess', _2 => _2.update, 'call', _3 => _3()]);
+  }
+
+  dispose() {
+    this.reset();
+    this.orbitControl.dispose();
+    this.deps.scene.add(this.deps.camera);
+    this.deps.scene.remove(this.gltf.scene);
+    this.deps.scene.remove(this.ambientLight);
+    this.deps.camera.remove(this.pointLight);
+    this.deps.scene.background = null;
+    this.pointLight = null;
+    this.ambientLight = null;
+    this.orbitControl = null;
+    this.deps = null;
+  }
+}
+
+var OBJLoader = ( function () {
+
+	// o object_name | g group_name
+	var object_pattern = /^[og]\s*(.+)?/;
+	// mtllib file_reference
+	var material_library_pattern = /^mtllib /;
+	// usemtl material_name
+	var material_use_pattern = /^usemtl /;
+	// usemap map_name
+	var map_use_pattern = /^usemap /;
+
+	var vA = new Vector3();
+	var vB = new Vector3();
+	var vC = new Vector3();
+
+	var ab = new Vector3();
+	var cb = new Vector3();
+
+	function ParserState() {
+
+		var state = {
+			objects: [],
+			object: {},
+
+			vertices: [],
+			normals: [],
+			colors: [],
+			uvs: [],
+
+			materials: {},
+			materialLibraries: [],
+
+			startObject: function ( name, fromDeclaration ) {
+
+				// If the current object (initial from reset) is not from a g/o declaration in the parsed
+				// file. We need to use it for the first parsed g/o to keep things in sync.
+				if ( this.object && this.object.fromDeclaration === false ) {
+
+					this.object.name = name;
+					this.object.fromDeclaration = ( fromDeclaration !== false );
+					return;
+
+				}
+
+				var previousMaterial = ( this.object && typeof this.object.currentMaterial === 'function' ? this.object.currentMaterial() : undefined );
+
+				if ( this.object && typeof this.object._finalize === 'function' ) {
+
+					this.object._finalize( true );
+
+				}
+
+				this.object = {
+					name: name || '',
+					fromDeclaration: ( fromDeclaration !== false ),
+
+					geometry: {
+						vertices: [],
+						normals: [],
+						colors: [],
+						uvs: [],
+						hasUVIndices: false
+					},
+					materials: [],
+					smooth: true,
+
+					startMaterial: function ( name, libraries ) {
+
+						var previous = this._finalize( false );
+
+						// New usemtl declaration overwrites an inherited material, except if faces were declared
+						// after the material, then it must be preserved for proper MultiMaterial continuation.
+						if ( previous && ( previous.inherited || previous.groupCount <= 0 ) ) {
+
+							this.materials.splice( previous.index, 1 );
+
+						}
+
+						var material = {
+							index: this.materials.length,
+							name: name || '',
+							mtllib: ( Array.isArray( libraries ) && libraries.length > 0 ? libraries[ libraries.length - 1 ] : '' ),
+							smooth: ( previous !== undefined ? previous.smooth : this.smooth ),
+							groupStart: ( previous !== undefined ? previous.groupEnd : 0 ),
+							groupEnd: - 1,
+							groupCount: - 1,
+							inherited: false,
+
+							clone: function ( index ) {
+
+								var cloned = {
+									index: ( typeof index === 'number' ? index : this.index ),
+									name: this.name,
+									mtllib: this.mtllib,
+									smooth: this.smooth,
+									groupStart: 0,
+									groupEnd: - 1,
+									groupCount: - 1,
+									inherited: false
+								};
+								cloned.clone = this.clone.bind( cloned );
+								return cloned;
+
+							}
+						};
+
+						this.materials.push( material );
+
+						return material;
+
+					},
+
+					currentMaterial: function () {
+
+						if ( this.materials.length > 0 ) {
+
+							return this.materials[ this.materials.length - 1 ];
+
+						}
+
+						return undefined;
+
+					},
+
+					_finalize: function ( end ) {
+
+						var lastMultiMaterial = this.currentMaterial();
+						if ( lastMultiMaterial && lastMultiMaterial.groupEnd === - 1 ) {
+
+							lastMultiMaterial.groupEnd = this.geometry.vertices.length / 3;
+							lastMultiMaterial.groupCount = lastMultiMaterial.groupEnd - lastMultiMaterial.groupStart;
+							lastMultiMaterial.inherited = false;
+
+						}
+
+						// Ignore objects tail materials if no face declarations followed them before a new o/g started.
+						if ( end && this.materials.length > 1 ) {
+
+							for ( var mi = this.materials.length - 1; mi >= 0; mi -- ) {
+
+								if ( this.materials[ mi ].groupCount <= 0 ) {
+
+									this.materials.splice( mi, 1 );
+
+								}
+
+							}
+
+						}
+
+						// Guarantee at least one empty material, this makes the creation later more straight forward.
+						if ( end && this.materials.length === 0 ) {
+
+							this.materials.push( {
+								name: '',
+								smooth: this.smooth
+							} );
+
+						}
+
+						return lastMultiMaterial;
+
+					}
+				};
+
+				// Inherit previous objects material.
+				// Spec tells us that a declared material must be set to all objects until a new material is declared.
+				// If a usemtl declaration is encountered while this new object is being parsed, it will
+				// overwrite the inherited material. Exception being that there was already face declarations
+				// to the inherited material, then it will be preserved for proper MultiMaterial continuation.
+
+				if ( previousMaterial && previousMaterial.name && typeof previousMaterial.clone === 'function' ) {
+
+					var declared = previousMaterial.clone( 0 );
+					declared.inherited = true;
+					this.object.materials.push( declared );
+
+				}
+
+				this.objects.push( this.object );
+
+			},
+
+			finalize: function () {
+
+				if ( this.object && typeof this.object._finalize === 'function' ) {
+
+					this.object._finalize( true );
+
+				}
+
+			},
+
+			parseVertexIndex: function ( value, len ) {
+
+				var index = parseInt( value, 10 );
+				return ( index >= 0 ? index - 1 : index + len / 3 ) * 3;
+
+			},
+
+			parseNormalIndex: function ( value, len ) {
+
+				var index = parseInt( value, 10 );
+				return ( index >= 0 ? index - 1 : index + len / 3 ) * 3;
+
+			},
+
+			parseUVIndex: function ( value, len ) {
+
+				var index = parseInt( value, 10 );
+				return ( index >= 0 ? index - 1 : index + len / 2 ) * 2;
+
+			},
+
+			addVertex: function ( a, b, c ) {
+
+				var src = this.vertices;
+				var dst = this.object.geometry.vertices;
+
+				dst.push( src[ a + 0 ], src[ a + 1 ], src[ a + 2 ] );
+				dst.push( src[ b + 0 ], src[ b + 1 ], src[ b + 2 ] );
+				dst.push( src[ c + 0 ], src[ c + 1 ], src[ c + 2 ] );
+
+			},
+
+			addVertexPoint: function ( a ) {
+
+				var src = this.vertices;
+				var dst = this.object.geometry.vertices;
+
+				dst.push( src[ a + 0 ], src[ a + 1 ], src[ a + 2 ] );
+
+			},
+
+			addVertexLine: function ( a ) {
+
+				var src = this.vertices;
+				var dst = this.object.geometry.vertices;
+
+				dst.push( src[ a + 0 ], src[ a + 1 ], src[ a + 2 ] );
+
+			},
+
+			addNormal: function ( a, b, c ) {
+
+				var src = this.normals;
+				var dst = this.object.geometry.normals;
+
+				dst.push( src[ a + 0 ], src[ a + 1 ], src[ a + 2 ] );
+				dst.push( src[ b + 0 ], src[ b + 1 ], src[ b + 2 ] );
+				dst.push( src[ c + 0 ], src[ c + 1 ], src[ c + 2 ] );
+
+			},
+
+			addFaceNormal: function ( a, b, c ) {
+
+				var src = this.vertices;
+				var dst = this.object.geometry.normals;
+
+				vA.fromArray( src, a );
+				vB.fromArray( src, b );
+				vC.fromArray( src, c );
+
+				cb.subVectors( vC, vB );
+				ab.subVectors( vA, vB );
+				cb.cross( ab );
+
+				cb.normalize();
+
+				dst.push( cb.x, cb.y, cb.z );
+				dst.push( cb.x, cb.y, cb.z );
+				dst.push( cb.x, cb.y, cb.z );
+
+			},
+
+			addColor: function ( a, b, c ) {
+
+				var src = this.colors;
+				var dst = this.object.geometry.colors;
+
+				if ( src[ a ] !== undefined ) dst.push( src[ a + 0 ], src[ a + 1 ], src[ a + 2 ] );
+				if ( src[ b ] !== undefined ) dst.push( src[ b + 0 ], src[ b + 1 ], src[ b + 2 ] );
+				if ( src[ c ] !== undefined ) dst.push( src[ c + 0 ], src[ c + 1 ], src[ c + 2 ] );
+
+			},
+
+			addUV: function ( a, b, c ) {
+
+				var src = this.uvs;
+				var dst = this.object.geometry.uvs;
+
+				dst.push( src[ a + 0 ], src[ a + 1 ] );
+				dst.push( src[ b + 0 ], src[ b + 1 ] );
+				dst.push( src[ c + 0 ], src[ c + 1 ] );
+
+			},
+
+			addDefaultUV: function () {
+
+				var dst = this.object.geometry.uvs;
+
+				dst.push( 0, 0 );
+				dst.push( 0, 0 );
+				dst.push( 0, 0 );
+
+			},
+
+			addUVLine: function ( a ) {
+
+				var src = this.uvs;
+				var dst = this.object.geometry.uvs;
+
+				dst.push( src[ a + 0 ], src[ a + 1 ] );
+
+			},
+
+			addFace: function ( a, b, c, ua, ub, uc, na, nb, nc ) {
+
+				var vLen = this.vertices.length;
+
+				var ia = this.parseVertexIndex( a, vLen );
+				var ib = this.parseVertexIndex( b, vLen );
+				var ic = this.parseVertexIndex( c, vLen );
+
+				this.addVertex( ia, ib, ic );
+				this.addColor( ia, ib, ic );
+
+				// normals
+
+				if ( na !== undefined && na !== '' ) {
+
+					var nLen = this.normals.length;
+
+					ia = this.parseNormalIndex( na, nLen );
+					ib = this.parseNormalIndex( nb, nLen );
+					ic = this.parseNormalIndex( nc, nLen );
+
+					this.addNormal( ia, ib, ic );
+
+				} else {
+
+					this.addFaceNormal( ia, ib, ic );
+
+				}
+
+				// uvs
+
+				if ( ua !== undefined && ua !== '' ) {
+
+					var uvLen = this.uvs.length;
+
+					ia = this.parseUVIndex( ua, uvLen );
+					ib = this.parseUVIndex( ub, uvLen );
+					ic = this.parseUVIndex( uc, uvLen );
+
+					this.addUV( ia, ib, ic );
+
+					this.object.geometry.hasUVIndices = true;
+
+				} else {
+
+					// add placeholder values (for inconsistent face definitions)
+
+					this.addDefaultUV();
+
+				}
+
+			},
+
+			addPointGeometry: function ( vertices ) {
+
+				this.object.geometry.type = 'Points';
+
+				var vLen = this.vertices.length;
+
+				for ( var vi = 0, l = vertices.length; vi < l; vi ++ ) {
+
+					var index = this.parseVertexIndex( vertices[ vi ], vLen );
+
+					this.addVertexPoint( index );
+					this.addColor( index );
+
+				}
+
+			},
+
+			addLineGeometry: function ( vertices, uvs ) {
+
+				this.object.geometry.type = 'Line';
+
+				var vLen = this.vertices.length;
+				var uvLen = this.uvs.length;
+
+				for ( var vi = 0, l = vertices.length; vi < l; vi ++ ) {
+
+					this.addVertexLine( this.parseVertexIndex( vertices[ vi ], vLen ) );
+
+				}
+
+				for ( var uvi = 0, l = uvs.length; uvi < l; uvi ++ ) {
+
+					this.addUVLine( this.parseUVIndex( uvs[ uvi ], uvLen ) );
+
+				}
+
+			}
+
+		};
+
+		state.startObject( '', false );
+
+		return state;
+
+	}
+
+	//
+
+	function OBJLoader( manager ) {
+
+		Loader.call( this, manager );
+
+		this.materials = null;
+
+	}
+
+	OBJLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
+
+		constructor: OBJLoader,
+
+		load: function ( url, onLoad, onProgress, onError ) {
+
+			var scope = this;
+
+			var loader = new FileLoader( this.manager );
+			loader.setPath( this.path );
+			loader.setRequestHeader( this.requestHeader );
+			loader.setWithCredentials( this.withCredentials );
+			loader.load( url, function ( text ) {
+
+				try {
+
+					onLoad( scope.parse( text ) );
+
+				} catch ( e ) {
+
+					if ( onError ) {
+
+						onError( e );
+
+					} else {
+
+						console.error( e );
+
+					}
+
+					scope.manager.itemError( url );
+
+				}
+
+			}, onProgress, onError );
+
+		},
+
+		setMaterials: function ( materials ) {
+
+			this.materials = materials;
+
+			return this;
+
+		},
+
+		parse: function ( text ) {
+
+			var state = new ParserState();
+
+			if ( text.indexOf( '\r\n' ) !== - 1 ) {
+
+				// This is faster than String.split with regex that splits on both
+				text = text.replace( /\r\n/g, '\n' );
+
+			}
+
+			if ( text.indexOf( '\\\n' ) !== - 1 ) {
+
+				// join lines separated by a line continuation character (\)
+				text = text.replace( /\\\n/g, '' );
+
+			}
+
+			var lines = text.split( '\n' );
+			var line = '', lineFirstChar = '';
+			var lineLength = 0;
+			var result = [];
+
+			// Faster to just trim left side of the line. Use if available.
+			var trimLeft = ( typeof ''.trimLeft === 'function' );
+
+			for ( var i = 0, l = lines.length; i < l; i ++ ) {
+
+				line = lines[ i ];
+
+				line = trimLeft ? line.trimLeft() : line.trim();
+
+				lineLength = line.length;
+
+				if ( lineLength === 0 ) continue;
+
+				lineFirstChar = line.charAt( 0 );
+
+				// @todo invoke passed in handler if any
+				if ( lineFirstChar === '#' ) continue;
+
+				if ( lineFirstChar === 'v' ) {
+
+					var data = line.split( /\s+/ );
+
+					switch ( data[ 0 ] ) {
+
+						case 'v':
+							state.vertices.push(
+								parseFloat( data[ 1 ] ),
+								parseFloat( data[ 2 ] ),
+								parseFloat( data[ 3 ] )
+							);
+							if ( data.length >= 7 ) {
+
+								state.colors.push(
+									parseFloat( data[ 4 ] ),
+									parseFloat( data[ 5 ] ),
+									parseFloat( data[ 6 ] )
+
+								);
+
+							} else {
+
+								// if no colors are defined, add placeholders so color and vertex indices match
+
+								state.colors.push( undefined, undefined, undefined );
+
+							}
+
+							break;
+						case 'vn':
+							state.normals.push(
+								parseFloat( data[ 1 ] ),
+								parseFloat( data[ 2 ] ),
+								parseFloat( data[ 3 ] )
+							);
+							break;
+						case 'vt':
+							state.uvs.push(
+								parseFloat( data[ 1 ] ),
+								parseFloat( data[ 2 ] )
+							);
+							break;
+
+					}
+
+				} else if ( lineFirstChar === 'f' ) {
+
+					var lineData = line.substr( 1 ).trim();
+					var vertexData = lineData.split( /\s+/ );
+					var faceVertices = [];
+
+					// Parse the face vertex data into an easy to work with format
+
+					for ( var j = 0, jl = vertexData.length; j < jl; j ++ ) {
+
+						var vertex = vertexData[ j ];
+
+						if ( vertex.length > 0 ) {
+
+							var vertexParts = vertex.split( '/' );
+							faceVertices.push( vertexParts );
+
+						}
+
+					}
+
+					// Draw an edge between the first vertex and all subsequent vertices to form an n-gon
+
+					var v1 = faceVertices[ 0 ];
+
+					for ( var j = 1, jl = faceVertices.length - 1; j < jl; j ++ ) {
+
+						var v2 = faceVertices[ j ];
+						var v3 = faceVertices[ j + 1 ];
+
+						state.addFace(
+							v1[ 0 ], v2[ 0 ], v3[ 0 ],
+							v1[ 1 ], v2[ 1 ], v3[ 1 ],
+							v1[ 2 ], v2[ 2 ], v3[ 2 ]
+						);
+
+					}
+
+				} else if ( lineFirstChar === 'l' ) {
+
+					var lineParts = line.substring( 1 ).trim().split( ' ' );
+					var lineVertices = [], lineUVs = [];
+
+					if ( line.indexOf( '/' ) === - 1 ) {
+
+						lineVertices = lineParts;
+
+					} else {
+
+						for ( var li = 0, llen = lineParts.length; li < llen; li ++ ) {
+
+							var parts = lineParts[ li ].split( '/' );
+
+							if ( parts[ 0 ] !== '' ) lineVertices.push( parts[ 0 ] );
+							if ( parts[ 1 ] !== '' ) lineUVs.push( parts[ 1 ] );
+
+						}
+
+					}
+
+					state.addLineGeometry( lineVertices, lineUVs );
+
+				} else if ( lineFirstChar === 'p' ) {
+
+					var lineData = line.substr( 1 ).trim();
+					var pointData = lineData.split( ' ' );
+
+					state.addPointGeometry( pointData );
+
+				} else if ( ( result = object_pattern.exec( line ) ) !== null ) {
+
+					// o object_name
+					// or
+					// g group_name
+
+					// WORKAROUND: https://bugs.chromium.org/p/v8/issues/detail?id=2869
+					// var name = result[ 0 ].substr( 1 ).trim();
+					var name = ( ' ' + result[ 0 ].substr( 1 ).trim() ).substr( 1 );
+
+					state.startObject( name );
+
+				} else if ( material_use_pattern.test( line ) ) {
+
+					// material
+
+					state.object.startMaterial( line.substring( 7 ).trim(), state.materialLibraries );
+
+				} else if ( material_library_pattern.test( line ) ) {
+
+					// mtl file
+
+					state.materialLibraries.push( line.substring( 7 ).trim() );
+
+				} else if ( map_use_pattern.test( line ) ) {
+
+					// the line is parsed but ignored since the loader assumes textures are defined MTL files
+					// (according to https://www.okino.com/conv/imp_wave.htm, 'usemap' is the old-style Wavefront texture reference method)
+
+					console.warn( 'THREE.OBJLoader: Rendering identifier "usemap" not supported. Textures must be defined in MTL files.' );
+
+				} else if ( lineFirstChar === 's' ) {
+
+					result = line.split( ' ' );
+
+					// smooth shading
+
+					// @todo Handle files that have varying smooth values for a set of faces inside one geometry,
+					// but does not define a usemtl for each face set.
+					// This should be detected and a dummy material created (later MultiMaterial and geometry groups).
+					// This requires some care to not create extra material on each smooth value for "normal" obj files.
+					// where explicit usemtl defines geometry groups.
+					// Example asset: examples/models/obj/cerberus/Cerberus.obj
+
+					/*
+					 * http://paulbourke.net/dataformats/obj/
+					 * or
+					 * http://www.cs.utah.edu/~boulos/cs3505/obj_spec.pdf
+					 *
+					 * From chapter "Grouping" Syntax explanation "s group_number":
+					 * "group_number is the smoothing group number. To turn off smoothing groups, use a value of 0 or off.
+					 * Polygonal elements use group numbers to put elements in different smoothing groups. For free-form
+					 * surfaces, smoothing groups are either turned on or off; there is no difference between values greater
+					 * than 0."
+					 */
+					if ( result.length > 1 ) {
+
+						var value = result[ 1 ].trim().toLowerCase();
+						state.object.smooth = ( value !== '0' && value !== 'off' );
+
+					} else {
+
+						// ZBrush can produce "s" lines #11707
+						state.object.smooth = true;
+
+					}
+
+					var material = state.object.currentMaterial();
+					if ( material ) material.smooth = state.object.smooth;
+
+				} else {
+
+					// Handle null terminated files without exception
+					if ( line === '\0' ) continue;
+
+					console.warn( 'THREE.OBJLoader: Unexpected line: "' + line + '"' );
+
+				}
+
+			}
+
+			state.finalize();
+
+			var container = new Group();
+			container.materialLibraries = [].concat( state.materialLibraries );
+
+			var hasPrimitives = ! ( state.objects.length === 1 && state.objects[ 0 ].geometry.vertices.length === 0 );
+
+			if ( hasPrimitives === true ) {
+
+				for ( var i = 0, l = state.objects.length; i < l; i ++ ) {
+
+					var object = state.objects[ i ];
+					var geometry = object.geometry;
+					var materials = object.materials;
+					var isLine = ( geometry.type === 'Line' );
+					var isPoints = ( geometry.type === 'Points' );
+					var hasVertexColors = false;
+
+					// Skip o/g line declarations that did not follow with any faces
+					if ( geometry.vertices.length === 0 ) continue;
+
+					var buffergeometry = new BufferGeometry();
+
+					buffergeometry.setAttribute( 'position', new Float32BufferAttribute( geometry.vertices, 3 ) );
+
+					if ( geometry.normals.length > 0 ) {
+
+						buffergeometry.setAttribute( 'normal', new Float32BufferAttribute( geometry.normals, 3 ) );
+
+					}
+
+					if ( geometry.colors.length > 0 ) {
+
+						hasVertexColors = true;
+						buffergeometry.setAttribute( 'color', new Float32BufferAttribute( geometry.colors, 3 ) );
+
+					}
+
+					if ( geometry.hasUVIndices === true ) {
+
+						buffergeometry.setAttribute( 'uv', new Float32BufferAttribute( geometry.uvs, 2 ) );
+
+					}
+
+					// Create materials
+
+					var createdMaterials = [];
+
+					for ( var mi = 0, miLen = materials.length; mi < miLen; mi ++ ) {
+
+						var sourceMaterial = materials[ mi ];
+						var materialHash = sourceMaterial.name + '_' + sourceMaterial.smooth + '_' + hasVertexColors;
+						var material = state.materials[ materialHash ];
+
+						if ( this.materials !== null ) {
+
+							material = this.materials.create( sourceMaterial.name );
+
+							// mtl etc. loaders probably can't create line materials correctly, copy properties to a line material.
+							if ( isLine && material && ! ( material instanceof LineBasicMaterial ) ) {
+
+								var materialLine = new LineBasicMaterial();
+								Material.prototype.copy.call( materialLine, material );
+								materialLine.color.copy( material.color );
+								material = materialLine;
+
+							} else if ( isPoints && material && ! ( material instanceof PointsMaterial ) ) {
+
+								var materialPoints = new PointsMaterial( { size: 10, sizeAttenuation: false } );
+								Material.prototype.copy.call( materialPoints, material );
+								materialPoints.color.copy( material.color );
+								materialPoints.map = material.map;
+								material = materialPoints;
+
+							}
+
+						}
+
+						if ( material === undefined ) {
+
+							if ( isLine ) {
+
+								material = new LineBasicMaterial();
+
+							} else if ( isPoints ) {
+
+								material = new PointsMaterial( { size: 1, sizeAttenuation: false } );
+
+							} else {
+
+								material = new MeshPhongMaterial();
+
+							}
+
+							material.name = sourceMaterial.name;
+							material.flatShading = sourceMaterial.smooth ? false : true;
+							material.vertexColors = hasVertexColors;
+
+							state.materials[ materialHash ] = material;
+
+						}
+
+						createdMaterials.push( material );
+
+					}
+
+					// Create mesh
+
+					var mesh;
+
+					if ( createdMaterials.length > 1 ) {
+
+						for ( var mi = 0, miLen = materials.length; mi < miLen; mi ++ ) {
+
+							var sourceMaterial = materials[ mi ];
+							buffergeometry.addGroup( sourceMaterial.groupStart, sourceMaterial.groupCount, mi );
+
+						}
+
+						if ( isLine ) {
+
+							mesh = new LineSegments( buffergeometry, createdMaterials );
+
+						} else if ( isPoints ) {
+
+							mesh = new Points( buffergeometry, createdMaterials );
+
+						} else {
+
+							mesh = new Mesh( buffergeometry, createdMaterials );
+
+						}
+
+					} else {
+
+						if ( isLine ) {
+
+							mesh = new LineSegments( buffergeometry, createdMaterials[ 0 ] );
+
+						} else if ( isPoints ) {
+
+							mesh = new Points( buffergeometry, createdMaterials[ 0 ] );
+
+						} else {
+
+							mesh = new Mesh( buffergeometry, createdMaterials[ 0 ] );
+
+						}
+
+					}
+
+					mesh.name = object.name;
+
+					container.add( mesh );
+
+				}
+
+			} else {
+
+				// if there is only the default parser state object with no geometry data, interpret data as point cloud
+
+				if ( state.vertices.length > 0 ) {
+
+					var material = new PointsMaterial( { size: 1, sizeAttenuation: false } );
+
+					var buffergeometry = new BufferGeometry();
+
+					buffergeometry.setAttribute( 'position', new Float32BufferAttribute( state.vertices, 3 ) );
+
+					if ( state.colors.length > 0 && state.colors[ 0 ] !== undefined ) {
+
+						buffergeometry.setAttribute( 'color', new Float32BufferAttribute( state.colors, 3 ) );
+						material.vertexColors = true;
+
+					}
+
+					var points = new Points( buffergeometry, material );
+					container.add( points );
+
+				}
+
+			}
+
+			return container;
+
+		}
+
+	} );
+
+	return OBJLoader;
+
+} )();
+
 class DemoOBJLoader extends Demo {
   
   
@@ -53119,6 +53286,7 @@ class DemoOBJLoader extends Demo {
     this.deps.scene.remove(this.ambientLight);
     this.deps.camera.remove(this.pointLight);
     this.deps.scene.remove(this.object);
+    this.deps.scene.remove(this.deps.camera);
     this.object.traverse(function (child) {
       // @ts-ignore
       if (child.isMesh) {
@@ -55354,7 +55522,7 @@ SVGLoader.pointsToStrokeWithBuffers = function () {
 
 }();
 
-function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
+function _optionalChain$1(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
 const baseUrl$1 = 'http://www.yanhuangxueyuan.com/threejs';
 
 class DemoSVGLoader extends Demo {
@@ -55470,7 +55638,7 @@ class DemoSVGLoader extends Demo {
   }
 
   update() {
-    _optionalChain([this, 'access', _ => _.orbitControl, 'optionalAccess', _2 => _2.update, 'call', _3 => _3()]);
+    _optionalChain$1([this, 'access', _ => _.orbitControl, 'optionalAccess', _2 => _2.update, 'call', _3 => _3()]);
   }
 
   dispose() {
@@ -55962,7 +56130,7 @@ RGBELoader.prototype = Object.assign( Object.create( DataTextureLoader.prototype
 
 } );
 
-function _optionalChain$1(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
+function _optionalChain$2(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
 const baseUrl$2 = 'http://www.yanhuangxueyuan.com/threejs';
 
 class DemoRGBELoader extends Demo {
@@ -56041,7 +56209,7 @@ class DemoRGBELoader extends Demo {
   }
 
   update() {
-    _optionalChain$1([this, 'access', _ => _.orbitControl, 'optionalAccess', _2 => _2.update, 'call', _3 => _3()]);
+    _optionalChain$2([this, 'access', _ => _.orbitControl, 'optionalAccess', _2 => _2.update, 'call', _3 => _3()]);
   }
 
   dispose() {
@@ -56062,7 +56230,7 @@ class DemoRGBELoader extends Demo {
   }
 }
 
-function _optionalChain$2(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
+function _optionalChain$3(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
 class DemoGLTFLoader extends Demo {
   
   
@@ -56122,8 +56290,8 @@ class DemoGLTFLoader extends Demo {
   }
 
   update() {
-    _optionalChain$2([this, 'access', _ => _.mixer, 'optionalAccess', _2 => _2.update, 'call', _3 => _3(this.deps.clock.getDelta())]);
-    _optionalChain$2([this, 'access', _4 => _4.orbitControl, 'optionalAccess', _5 => _5.update, 'call', _6 => _6()]);
+    _optionalChain$3([this, 'access', _ => _.mixer, 'optionalAccess', _2 => _2.update, 'call', _3 => _3(this.deps.clock.getDelta())]);
+    _optionalChain$3([this, 'access', _4 => _4.orbitControl, 'optionalAccess', _5 => _5.update, 'call', _6 => _6()]);
   }
 
   dispose() {
@@ -56142,7 +56310,7 @@ class DemoGLTFLoader extends Demo {
   }
 }
 
-function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } } function _optionalChain$3(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
+function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } } function _optionalChain$4(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
 
 class ThreeSpritePlayer {
    __init() {this.currFrame = 0;}
@@ -56223,7 +56391,7 @@ class ThreeSpritePlayer {
   }
 
    dispose() {
-    _optionalChain$3([this, 'access', _ => _.mesh, 'optionalAccess', _2 => _2.material, 'access', _3 => _3.dispose, 'call', _4 => _4()]);
+    _optionalChain$4([this, 'access', _ => _.mesh, 'optionalAccess', _2 => _2.material, 'access', _3 => _3.dispose, 'call', _4 => _4()]);
     this.tiles.forEach(texture => texture.dispose());
     this.tiles.length = 0;
     this.mesh = null;
@@ -56503,10 +56671,11 @@ class DemoDeviceOrientationControls extends Demo {
   }
 }
 
-function _optionalChain$4(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// index.ts
+function _optionalChain$5(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// index.ts
 
 const DEMO_MAP = {
   // BasisLoader: DemoBasisLoader,
+  MeshOpt: DemoMeshOpt,
   OBJLoader: DemoOBJLoader,
   SVGLoader: DemoSVGLoader,
   RGBELoader: DemoRGBELoader,
@@ -56534,6 +56703,7 @@ Page({
       'RGBELoader',
       'SVGLoader',
       'OBJLoader',
+      'MeshOpt',
       'BasisLoader(TODO)',
       'Raycaster(TODO)',
       'Geometry(TODO)'
@@ -56576,7 +56746,7 @@ Page({
     const render = () => {
       if (this.disposing) return
       $requestAnimationFrame(render);
-      _optionalChain$4([(this.currDemo ), 'optionalAccess', _ => _.update, 'call', _2 => _2()]);
+      _optionalChain$5([(this.currDemo ), 'optionalAccess', _ => _.update, 'call', _2 => _2()]);
       renderer.render(scene, camera);
     };
 
@@ -56600,7 +56770,7 @@ Page({
 
     if (this.switchingItem || !DEMO_MAP[item]) return
 
-    _optionalChain$4([(this.currDemo ), 'optionalAccess', _3 => _3.dispose, 'call', _4 => _4()]);
+    _optionalChain$5([(this.currDemo ), 'optionalAccess', _3 => _3.dispose, 'call', _4 => _4()]);
     this.switchingItem = true;
     this.currDemo = null ;
 
@@ -56626,7 +56796,7 @@ Page({
 
   onUnload() {
     this.disposing = true;
-    _optionalChain$4([(this.currDemo ), 'optionalAccess', _5 => _5.dispose, 'call', _6 => _6()]);
+    _optionalChain$5([(this.currDemo ), 'optionalAccess', _5 => _5.dispose, 'call', _6 => _6()]);
     PLATFORM.dispose();
   }
 });
