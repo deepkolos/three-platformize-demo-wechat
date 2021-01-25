@@ -2,10 +2,10 @@
 import { $requestAnimationFrame as requestAnimationFrame, $window as window, Clock, PerspectiveCamera, PLATFORM, Scene, sRGBEncoding, TextureLoader, WebGL1Renderer } from 'three-platformize'
 import { WechatPlatform } from 'three-platformize/src/WechatPlatform'
 import { GLTFLoader } from 'three-platformize/examples/jsm/loaders/GLTFLoader'
-import { DemoDeps, Demo, DemoGLTFLoader, DemoThreeSpritePlayer, DemoDeviceOrientationControls, DemoRGBELoader, DemoSVGLoader, DemoOBJLoader, DemoBasisLoader } from 'three-platformize-demo/src/index'
+import { DemoDeps, Demo, DemoGLTFLoader, DemoThreeSpritePlayer, DemoDeviceOrientationControls, DemoRGBELoader, DemoSVGLoader, DemoOBJLoader } from 'three-platformize-demo/src/index'
 
 const DEMO_MAP = {
-  BasisLoader: DemoBasisLoader,
+  // BasisLoader: DemoBasisLoader,
   OBJLoader: DemoOBJLoader,
   SVGLoader: DemoSVGLoader,
   RGBELoader: DemoRGBELoader,
@@ -33,9 +33,9 @@ Page({
       'RGBELoader',
       'SVGLoader',
       'OBJLoader',
-      'BasisLoader',
-      'Raycaster',
-      'Geometry'
+      'BasisLoader(TODO)',
+      'Raycaster(TODO)',
+      'Geometry(TODO)'
     ]
   },
 
@@ -95,12 +95,14 @@ Page({
   },
 
   async onMenuItemClick(e) {
-    if (this.switchingItem) return
+    const { i, item } = e.currentTarget.dataset;
+
+    if (this.switchingItem || !DEMO_MAP[item]) return
+
     (this.currDemo as Demo)?.dispose();
     this.switchingItem = true;
     this.currDemo = null as unknown as Demo;
 
-    const { i, item } = e.currentTarget.dataset;
     const demo = new (DEMO_MAP[item])(this.deps) as Demo;
     await demo.init();
     this.currDemo = demo;
