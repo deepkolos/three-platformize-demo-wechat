@@ -50,7 +50,7 @@
   width: 70vw;
   height: calc(92vh + 1px);
   background-color: rgb(240, 240, 240);
-  overflow: hidden;
+  overflow: auto;
   flex: none;
   display: flex;
   flex-direction: column;
@@ -58,6 +58,7 @@
   transition: transform ease 0.33s;
   will-change: trasform;
   z-index: 2;
+  -webkit-overflow-scrolling: touch;
 }
 
 .menu-can.active {
