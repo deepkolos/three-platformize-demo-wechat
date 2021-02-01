@@ -3,8 +3,6 @@
   "version": "1.0.0",
   "description": "",
   "scripts": {
-    "compile": "./node_modules/typescript/bin/tsc",
-    "tsc": "node ./node_modules/typescript/lib/tsc.js",
     "dev": "rollup -w -c rollup.config.js",
     "build": "rollup -c rollup.config.js",
     "changelog": "conventional-changelog -p angular -i CHANGELOG.md -s -r 0"
@@ -13,10 +11,8 @@
   "author": "",
   "license": "",
   "dependencies": {
-    "three-platformize": "file:..\\three-platformize",
-    "three-platformize-demo": "file:..\\three-platformize-demo",
-    "three-sprite-player": "^1.0.4",
-    "xmldom-qsa": "^1.0.3"
+    "three-platformize": "^1.0.6",
+    "three-platformize-demo": "^1.0.2"
   },
   "devDependencies": {
     "@rollup/plugin-commonjs": "^17.0.0",
