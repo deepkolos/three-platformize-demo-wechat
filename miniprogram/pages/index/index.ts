@@ -2,11 +2,12 @@
 import { $requestAnimationFrame as requestAnimationFrame, $window as window, Clock, PerspectiveCamera, PLATFORM, Scene, sRGBEncoding, TextureLoader, WebGL1Renderer } from 'three-platformize'
 import { WechatPlatform } from 'three-platformize/src/WechatPlatform'
 import { GLTFLoader } from 'three-platformize/examples/jsm/loaders/GLTFLoader'
-import { DemoDeps, Demo, DemoGLTFLoader, DemoThreeSpritePlayer, DemoDeviceOrientationControls, DemoRGBELoader, DemoSVGLoader, DemoOBJLoader, DemoMeshOpt, DemoEXRLoader, DemoHDRPrefilterTexture } from 'three-platformize-demo/src/index'
+import { DemoDeps, Demo, DemoGLTFLoader, DemoThreeSpritePlayer, DemoDeviceOrientationControls, DemoRGBELoader, DemoSVGLoader, DemoOBJLoader, DemoMeshOpt, DemoEXRLoader, DemoHDRPrefilterTexture, DemoMTLLoader } from 'three-platformize-demo/src/index'
 
 const DEMO_MAP = {
   // BasisLoader: DemoBasisLoader,
   MeshOpt: DemoMeshOpt,
+  MTLLoader: DemoMTLLoader,
   EXRLoader: DemoEXRLoader,
   OBJLoader: DemoOBJLoader,
   SVGLoader: DemoSVGLoader,
@@ -39,6 +40,7 @@ Page({
       'MeshOpt',
       'EXRLoader',
       'HDRPrefilterTexture',
+      'MTLLoader',
       'BasisLoader(TODO)',
       'Raycaster(TODO)',
       'Geometry(TODO)',
