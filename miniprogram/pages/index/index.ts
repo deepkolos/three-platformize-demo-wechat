@@ -2,11 +2,12 @@
 import { $requestAnimationFrame as requestAnimationFrame, $window as window, Clock, PerspectiveCamera, PLATFORM, Scene, sRGBEncoding, TextureLoader, WebGL1Renderer } from 'three-platformize'
 import { WechatPlatform } from 'three-platformize/src/WechatPlatform'
 import { GLTFLoader } from 'three-platformize/examples/jsm/loaders/GLTFLoader'
-import { DemoDeps, Demo, DemoGLTFLoader, DemoThreeSpritePlayer, DemoDeviceOrientationControls, DemoRGBELoader, DemoSVGLoader, DemoOBJLoader, DemoMeshOpt, DemoEXRLoader, DemoHDRPrefilterTexture, DemoMTLLoader, DemoLWOLoader, DemoFBXLoader, DemoBVHLoader, DemoColladaLoader } from 'three-platformize-demo/src/index'
+import { DemoDeps, Demo, DemoGLTFLoader, DemoThreeSpritePlayer, DemoDeviceOrientationControls, DemoRGBELoader, DemoSVGLoader, DemoOBJLoader, DemoMeshOpt, DemoEXRLoader, DemoHDRPrefilterTexture, DemoMTLLoader, DemoLWOLoader, DemoFBXLoader, DemoBVHLoader, DemoColladaLoader, DemoMeshQuantization, DemoTTFLoader } from 'three-platformize-demo/src/index'
 
 const DEMO_MAP = {
   // BasisLoader: DemoBasisLoader,
   MeshOpt: DemoMeshOpt,
+  TTFLoader: DemoTTFLoader,
   BVHLoader: DemoBVHLoader,
   FBXLoader: DemoFBXLoader,
   LWOLoader: DemoLWOLoader,
@@ -17,6 +18,7 @@ const DEMO_MAP = {
   RGBELoader: DemoRGBELoader,
   GLTFLoader: DemoGLTFLoader,
   ColladaLoader: DemoColladaLoader,
+  MeshQuantization: DemoMeshQuantization,
   ThreeSpritePlayer: DemoThreeSpritePlayer,
   HDRPrefilterTexture: DemoHDRPrefilterTexture,
   DeviceOrientationControls: DemoDeviceOrientationControls
@@ -49,6 +51,8 @@ Page({
       'FBXLoader',
       'BVHLoader',
       'ColladaLoader',
+      'MeshQuantization',
+      'TTFLoader',
       'BasisLoader(TODO)',
       'Raycaster(TODO)',
       'Geometry(TODO)',
@@ -112,7 +116,7 @@ Page({
 
   async onMenuItemClick(e) {
     const { i, item } = e.currentTarget.dataset;
-
+    wx.showLoading({ mask: false, title: '加载中' })
     if (this.switchingItem || !DEMO_MAP[item]) return
 
     (this.currDemo as Demo)?.dispose();
@@ -125,6 +129,7 @@ Page({
     this.setData({ currItem: i })
     this.onMenuClick()
     this.switchingItem = false
+    wx.hideLoading()
   },
 
   onTS(e) {
