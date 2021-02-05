@@ -16,7 +16,7 @@ export default [
     plugins: [
       resolve({ extensions: ['.ts', '.js'] }),
       commonjs(),
-      // terser(),
+      terser(),
       sucrase({
         transforms: ['typescript']
       })
