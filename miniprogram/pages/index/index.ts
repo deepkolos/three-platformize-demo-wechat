@@ -2,11 +2,12 @@
 import { $requestAnimationFrame as requestAnimationFrame, $window as window, Clock, PerspectiveCamera, PLATFORM, Scene, sRGBEncoding, TextureLoader, WebGL1Renderer } from 'three-platformize'
 import { WechatPlatform } from 'three-platformize/src/WechatPlatform'
 import { GLTFLoader } from 'three-platformize/examples/jsm/loaders/GLTFLoader'
-import { DemoDeps, Demo, DemoGLTFLoader, DemoThreeSpritePlayer, DemoDeviceOrientationControls, DemoRGBELoader, DemoSVGLoader, DemoOBJLoader, DemoMeshOpt, DemoEXRLoader, DemoHDRPrefilterTexture, DemoMTLLoader, DemoLWOLoader, DemoFBXLoader, DemoBVHLoader, DemoColladaLoader, DemoMeshQuantization, DemoTTFLoader, DemoSTLLoader } from 'three-platformize-demo/src/index'
+import { DemoDeps, Demo, DemoGLTFLoader, DemoThreeSpritePlayer, DemoDeviceOrientationControls, DemoRGBELoader, DemoSVGLoader, DemoOBJLoader, DemoMeshOpt, DemoEXRLoader, DemoHDRPrefilterTexture, DemoMTLLoader, DemoLWOLoader, DemoFBXLoader, DemoBVHLoader, DemoColladaLoader, DemoMeshQuantization, DemoTTFLoader, DemoSTLLoader, DemoPDBLoader } from 'three-platformize-demo/src/index'
 
 const DEMO_MAP = {
   // BasisLoader: DemoBasisLoader,
   MeshOpt: DemoMeshOpt,
+  PDBLoader: DemoPDBLoader,
   STLLoader: DemoSTLLoader,
   TTFLoader: DemoTTFLoader,
   BVHLoader: DemoBVHLoader,
@@ -55,6 +56,7 @@ Page({
       'MeshQuantization',
       'TTFLoader',
       'STLLoader',
+      'PDBLoader',
       // 'BasisLoader(TODO)',
       // 'Raycaster(TODO)',
       // 'Geometry(TODO)',
