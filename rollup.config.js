@@ -5,6 +5,15 @@ import commonjs from '@rollup/plugin-commonjs';
 
 const production = !process.env.ROLLUP_WATCH;
 
+const plugins = [
+  resolve({ extensions: ['.ts', '.js'] }),
+  commonjs(),
+  terser(),
+  sucrase({
+    transforms: ['typescript']
+  })
+]
+
 export default [
   {
     input: './miniprogram/pages/index/index.ts',
@@ -13,13 +22,6 @@ export default [
       format: 'esm',
       file: './miniprogram/pages/index/index.js'
     },
-    plugins: [
-      resolve({ extensions: ['.ts', '.js'] }),
-      commonjs(),
-      // terser(),
-      sucrase({
-        transforms: ['typescript']
-      })
-    ]
-  }
+    plugins
+  },
 ]

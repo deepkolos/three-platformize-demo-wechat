@@ -73,3 +73,10 @@
 .menu-item.active {
   background-color: rgb(223, 223, 223);
 }
+
+.helper-canvas {
+  width: 0px;
+  height: 0px;
+  opacity: 0;
+  display: block;
+}

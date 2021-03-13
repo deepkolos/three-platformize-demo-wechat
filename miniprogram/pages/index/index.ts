@@ -2,11 +2,14 @@
 import { $requestAnimationFrame as requestAnimationFrame, $window as window, Clock, PerspectiveCamera, PLATFORM, Scene, sRGBEncoding, TextureLoader, WebGL1Renderer } from 'three-platformize'
 import { WechatPlatform } from 'three-platformize/src/WechatPlatform'
 import { GLTFLoader } from 'three-platformize/examples/jsm/loaders/GLTFLoader'
-import { DemoDeps, Demo, DemoGLTFLoader, DemoThreeSpritePlayer, DemoDeviceOrientationControls, DemoRGBELoader, DemoSVGLoader, DemoOBJLoader, DemoMeshOpt, DemoEXRLoader, DemoHDRPrefilterTexture, DemoMTLLoader, DemoLWOLoader, DemoFBXLoader, DemoBVHLoader, DemoColladaLoader, DemoMeshQuantization, DemoTTFLoader, DemoSTLLoader, DemoPDBLoader } from 'three-platformize-demo/src/index'
+import { DemoDeps, Demo, DemoGLTFLoader, DemoThreeSpritePlayer, DemoDeviceOrientationControls, DemoRGBELoader, DemoSVGLoader, DemoOBJLoader, DemoMeshOpt, DemoEXRLoader, DemoHDRPrefilterTexture, DemoMTLLoader, DemoLWOLoader, DemoFBXLoader, DemoBVHLoader, DemoColladaLoader, DemoMeshQuantization, DemoTTFLoader, DemoSTLLoader, DemoPDBLoader,  DemoTGALoader, DemoMemoryTest } from 'three-platformize-demo/src/index'
 
 const DEMO_MAP = {
   // BasisLoader: DemoBasisLoader,
+  MemoryTest: DemoMemoryTest,
+
   MeshOpt: DemoMeshOpt,
+  TGALoader: DemoTGALoader,
   PDBLoader: DemoPDBLoader,
   STLLoader: DemoSTLLoader,
   TTFLoader: DemoTTFLoader,
@@ -25,6 +28,8 @@ const DEMO_MAP = {
   HDRPrefilterTexture: DemoHDRPrefilterTexture,
   DeviceOrientationControls: DemoDeviceOrientationControls
 }
+
+const getNode = (id) => new Promise(r => wx.createSelectorQuery().select(id).fields({ node: true, size: true }).exec(r))
 
 // @ts-ignore
 Page({
@@ -57,6 +62,8 @@ Page({
       'TTFLoader',
       'STLLoader',
       'PDBLoader',
+      'TGALoader',
+      'MemoryTest',
       // 'BasisLoader(TODO)',
       // 'Raycaster(TODO)',
       // 'Geometry(TODO)',
@@ -68,12 +75,17 @@ Page({
   },
 
   onCanvasReady() {
-    wx.createSelectorQuery().select('#gl').fields({ node: true, size: true }).exec((res) => {
-      if (res[0]) this.initCanvas(res[0].node)
+    console.log('onCanvasReady')
+    Promise.all([
+      getNode('#gl'),
+      getNode('#canvas'),
+    ]).then(([glRes, canvasRes]) => {
+      // @ts-ignore
+      this.initCanvas(glRes[0].node, canvasRes[0].node)
     })
   },
 
-  initCanvas(canvas) {
+  initCanvas(canvas, helperCanvas) {
     const platform = new WechatPlatform(canvas);
     this.platform = platform;
     platform.enableDeviceOrientation('game');
@@ -104,6 +116,7 @@ Page({
     }
 
     render()
+    console.log('canvas inited')
   },
 
   onMenuClick() {

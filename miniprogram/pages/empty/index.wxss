@@ -1,0 +1,8 @@
+/* miniprogram/pages/memory/index.wxss */
+
+view {
+  text-align: center;
+  padding: 10px;
+  border: 1px solid black;
+  margin: 10px;
+}

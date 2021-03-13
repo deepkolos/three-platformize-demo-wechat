@@ -10,4 +10,5 @@
   </view>
 
   <canvas class="canvas {{showCanvas ? '' : 'hide'}}" id="gl" type="webgl" bindtouchstart="onTS" bindtouchmove="onTM" bindtouchend="onTE"></canvas>
+  <canvas class="helper-canvas" type="2d" id="canvas"></canvas>
 </view>

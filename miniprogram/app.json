@@ -1,5 +1,6 @@
 {
   "pages": [
+    "pages/empty/index",
     "pages/index/index"
   ],
   "window": {
