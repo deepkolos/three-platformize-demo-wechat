@@ -149,15 +149,8 @@ Page({
     wx.hideLoading()
   },
 
-  onTS(e) {
+  onTX(e) {
     this.platform.dispatchTouchEvent(e);
-  },
-
-  onTM(e) {
-    this.platform.dispatchTouchEvent(e);
-  },
-
-  onTE(e) {
     this.platform.dispatchTouchEvent(e);
   },
 
