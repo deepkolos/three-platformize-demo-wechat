@@ -1,8 +1,9 @@
 // index.ts
-import { $requestAnimationFrame as requestAnimationFrame, $window as window, Clock, PerspectiveCamera, PLATFORM, Scene, sRGBEncoding, TextureLoader, WebGL1Renderer } from 'three-platformize'
+import { $requestAnimationFrame as requestAnimationFrame, $window as window, Clock, PerspectiveCamera, PLATFORM, Scene, sRGBEncoding, TextureLoader, WebGL1Renderer, WebGLRenderTarget } from 'three-platformize'
 import { WechatPlatform } from 'three-platformize/src/WechatPlatform'
 import { GLTFLoader } from 'three-platformize/examples/jsm/loaders/GLTFLoader'
-import { DemoDeps, Demo, DemoGLTFLoader, DemoThreeSpritePlayer, DemoDeviceOrientationControls, DemoRGBELoader, DemoSVGLoader, DemoOBJLoader, DemoMeshOpt, DemoEXRLoader, DemoHDRPrefilterTexture, DemoMTLLoader, DemoLWOLoader, DemoFBXLoader, DemoBVHLoader, DemoColladaLoader, DemoMeshQuantization, DemoTTFLoader, DemoSTLLoader, DemoPDBLoader,  DemoTGALoader, DemoMemoryTest } from 'three-platformize-demo/src/index'
+import { DemoDeps, Demo, DemoGLTFLoader, DemoThreeSpritePlayer, DemoDeviceOrientationControls, DemoRGBELoader, DemoSVGLoader, DemoOBJLoader, DemoMeshOpt, DemoEXRLoader, DemoHDRPrefilterTexture, DemoMTLLoader, DemoLWOLoader, DemoFBXLoader, DemoBVHLoader, DemoColladaLoader, DemoMeshQuantization, DemoTTFLoader, DemoSTLLoader, DemoPDBLoader, DemoTGALoader, DemoMemoryTest } from 'three-platformize-demo/src/index'
+import { screenshot } from 'three-platformize/tools/screenshot'
 
 const DEMO_MAP = {
   // BasisLoader: DemoBasisLoader,
@@ -38,6 +39,7 @@ Page({
   deps: {} as DemoDeps,
   currDemo: null as unknown as Demo,
   platform: null as unknown as WechatPlatform,
+  helperCanvas: null as unknown as any,
 
   data: {
     showMenu: true,
@@ -102,11 +104,12 @@ Page({
     const textureLoader = new TextureLoader();
 
     this.deps = { renderer, camera, scene, clock, gltfLoader, textureLoader }
+    this.helperCanvas = helperCanvas;
 
     scene.position.z = -3;
     renderer.outputEncoding = sRGBEncoding;
-    renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(canvas.width, canvas.height);
+    renderer.setPixelRatio(window.devicePixelRatio);
 
     const render = () => {
       if (this.disposing) return
@@ -152,6 +155,28 @@ Page({
   onTX(e) {
     this.platform.dispatchTouchEvent(e);
     this.platform.dispatchTouchEvent(e);
+  },
+
+  screenshot() {
+    const { renderer, scene, camera } = this.deps
+    const [data, w, h] = screenshot(renderer, scene, camera, WebGLRenderTarget);
+    const ctx = this.helperCanvas.getContext('2d')
+    const imgData = this.helperCanvas.createImageData(data, w, h);
+    this.helperCanvas.height = imgData.height;
+    this.helperCanvas.width = imgData.width;
+    ctx.putImageData(imgData, 0, 0);
+    const imgDataFromCanvas = ctx.getImageData(0, 0, w, h)
+    const hasPixel = imgDataFromCanvas.data.some(i => i !== 0)
+    console.log('hasPixel', hasPixel)
+    wx.canvasToTempFilePath({
+      // @ts-ignore
+      canvas: this.helperCanvas,
+      success(res) {
+        wx.previewImage({
+          urls: [res.tempFilePath],
+        })
+      }
+    })
   },
 
   onUnload() {

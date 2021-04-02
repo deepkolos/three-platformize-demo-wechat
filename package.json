@@ -11,7 +11,7 @@
   "author": "",
   "license": "",
   "dependencies": {
-    "three-platformize": "^1.0.16",
+    "three-platformize": "^1.0.17",
     "three-platformize-demo": "^1.0.6"
   },
   "devDependencies": {
