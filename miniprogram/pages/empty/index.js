@@ -10,5 +10,11 @@ Page({
     wx.navigateTo({
       url: '/pages/index/index',
     })
+  },
+
+  gotoOther() {
+    wx.navigateTo({
+      url: '/pages/index-copy/index-copy',
+    })
   }
 })

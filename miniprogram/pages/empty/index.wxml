@@ -1,1 +1,2 @@
 <view bindtap="goto">goto three-platformize</view>
+<view bindtap="gotoOther">goto other three-platformize page</view>

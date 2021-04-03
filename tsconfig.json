@@ -3,7 +3,7 @@
     "strictNullChecks": true,
     "noImplicitAny": false,
     "module": "CommonJS",
-    "target": "ES5",
+    "target": "ES6",
     "allowJs": false,
     "experimentalDecorators": true,
     "noImplicitThis": true,

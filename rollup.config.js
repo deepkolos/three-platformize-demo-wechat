@@ -8,7 +8,7 @@ const production = !process.env.ROLLUP_WATCH;
 const plugins = [
   resolve({ extensions: ['.ts', '.js'] }),
   commonjs(),
-  terser(),
+  // terser(),
   sucrase({
     transforms: ['typescript']
   })
@@ -16,11 +16,15 @@ const plugins = [
 
 export default [
   {
-    input: './miniprogram/pages/index/index.ts',
+    input: ['./miniprogram/pages/index/index.ts', './miniprogram/pages/index-copy/index-copy.ts'],
     treeshake: true,
     output: {
-      format: 'esm',
-      file: './miniprogram/pages/index/index.js'
+      format: 'cjs',
+      dir: 'miniprogram/build',
+      chunkFileNames: 'chunk-[name].js',
+      manualChunks: {
+        'three-platformize': ['three-platformize']
+      }
     },
     plugins
   },

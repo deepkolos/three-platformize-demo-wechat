@@ -1,7 +1,8 @@
 {
   "pages": [
     "pages/empty/index",
-    "pages/index/index"
+    "pages/index/index",
+    "pages/index-copy/index-copy"
   ],
   "window": {
     "backgroundTextStyle": "light",
