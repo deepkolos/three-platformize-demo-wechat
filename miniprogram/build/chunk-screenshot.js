@@ -4860,7 +4860,7 @@ var OrbitControls = function ( object, domElement ) {
 	this.autoRotateSpeed = 2.0; // 30 seconds per orbit when fps is 60
 
 	// The four arrow keys
-	this.keys = { LEFT: 37, UP: 38, RIGHT: 39, BOTTOM: 40 };
+	this.keys = { LEFT: 'ArrowLeft', UP: 'ArrowUp', RIGHT: 'ArrowRight', BOTTOM: 'ArrowDown' };
 
 	// Mouse buttons
 	this.mouseButtons = { LEFT: threePlatformize.MOUSE.ROTATE, MIDDLE: threePlatformize.MOUSE.DOLLY, RIGHT: threePlatformize.MOUSE.PAN };
@@ -5377,7 +5377,7 @@ var OrbitControls = function ( object, domElement ) {
 
 		var needsUpdate = false;
 
-		switch ( event.keyCode ) {
+		switch ( event.code ) {
 
 			case scope.keys.UP:
 				pan( 0, scope.keyPanSpeed );
@@ -5772,7 +5772,6 @@ var OrbitControls = function ( object, domElement ) {
 		if ( scope.enabled === false || scope.enableZoom === false || ( state !== STATE.NONE && state !== STATE.ROTATE ) ) return;
 
 		event.preventDefault();
-		event.stopPropagation();
 
 		scope.dispatchEvent( startEvent );
 
@@ -5881,7 +5880,6 @@ var OrbitControls = function ( object, domElement ) {
 		if ( scope.enabled === false ) return;
 
 		event.preventDefault(); // prevent scrolling
-		event.stopPropagation();
 
 		switch ( state ) {
 
@@ -36931,7 +36929,7 @@ SVGLoader.prototype = Object.assign( Object.create( threePlatformize.Loader.prot
 						break;
 
 					case 'A':
-						var numbers = parseFloats( data );
+						var numbers = parseFloats( data, [ 3, 4 ], 7 );
 
 						for ( var j = 0, jl = numbers.length; j < jl; j += 7 ) {
 
@@ -37123,7 +37121,7 @@ SVGLoader.prototype = Object.assign( Object.create( threePlatformize.Loader.prot
 						break;
 
 					case 'a':
-						var numbers = parseFloats( data );
+						var numbers = parseFloats( data, [ 3, 4 ], 7 );
 
 						for ( var j = 0, jl = numbers.length; j < jl; j += 7 ) {
 
@@ -37394,9 +37392,9 @@ SVGLoader.prototype = Object.assign( Object.create( threePlatformize.Loader.prot
 
 		function parseCircleNode( node ) {
 
-			var x = parseFloatWithUnits( node.getAttribute( 'cx' ) );
-			var y = parseFloatWithUnits( node.getAttribute( 'cy' ) );
-			var r = parseFloatWithUnits( node.getAttribute( 'r' ) );
+			var x = parseFloatWithUnits( node.getAttribute( 'cx' ) || 0 );
+			var y = parseFloatWithUnits( node.getAttribute( 'cy' ) || 0 );
+			var r = parseFloatWithUnits( node.getAttribute( 'r' ) || 0 );
 
 			var subpath = new threePlatformize.Path();
 			subpath.absarc( x, y, r, 0, Math.PI * 2 );
@@ -37410,10 +37408,10 @@ SVGLoader.prototype = Object.assign( Object.create( threePlatformize.Loader.prot
 
 		function parseEllipseNode( node ) {
 
-			var x = parseFloatWithUnits( node.getAttribute( 'cx' ) );
-			var y = parseFloatWithUnits( node.getAttribute( 'cy' ) );
-			var rx = parseFloatWithUnits( node.getAttribute( 'rx' ) );
-			var ry = parseFloatWithUnits( node.getAttribute( 'ry' ) );
+			var x = parseFloatWithUnits( node.getAttribute( 'cx' ) || 0 );
+			var y = parseFloatWithUnits( node.getAttribute( 'cy' ) || 0 );
+			var rx = parseFloatWithUnits( node.getAttribute( 'rx' ) || 0 );
+			var ry = parseFloatWithUnits( node.getAttribute( 'ry' ) || 0 );
 
 			var subpath = new threePlatformize.Path();
 			subpath.absellipse( x, y, rx, ry, 0, Math.PI * 2 );
@@ -37427,10 +37425,10 @@ SVGLoader.prototype = Object.assign( Object.create( threePlatformize.Loader.prot
 
 		function parseLineNode( node ) {
 
-			var x1 = parseFloatWithUnits( node.getAttribute( 'x1' ) );
-			var y1 = parseFloatWithUnits( node.getAttribute( 'y1' ) );
-			var x2 = parseFloatWithUnits( node.getAttribute( 'x2' ) );
-			var y2 = parseFloatWithUnits( node.getAttribute( 'y2' ) );
+			var x1 = parseFloatWithUnits( node.getAttribute( 'x1' ) || 0 );
+			var y1 = parseFloatWithUnits( node.getAttribute( 'y1' ) || 0 );
+			var x2 = parseFloatWithUnits( node.getAttribute( 'x2' ) || 0 );
+			var y2 = parseFloatWithUnits( node.getAttribute( 'y2' ) || 0 );
 
 			var path = new threePlatformize.ShapePath();
 			path.moveTo( x1, y1 );
@@ -37523,7 +37521,7 @@ SVGLoader.prototype = Object.assign( Object.create( threePlatformize.Loader.prot
 
 		// from https://github.com/ppvg/svg-numbers (MIT License)
 
-		function parseFloats( input ) {
+		function parseFloats( input, flags, stride ) {
 
 			if ( typeof input !== 'string' ) {
 
@@ -37539,7 +37537,8 @@ SVGLoader.prototype = Object.assign( Object.create( threePlatformize.Loader.prot
 				SIGN: /[-+]/,
 				POINT: /\./,
 				COMMA: /,/,
-				EXP: /e/i
+				EXP: /e/i,
+				FLAGS: /[01]/
 			};
 
 			// States
@@ -37578,6 +37577,16 @@ SVGLoader.prototype = Object.assign( Object.create( threePlatformize.Loader.prot
 			for ( i = 0; i < length; i ++ ) {
 
 				current = input[ i ];
+
+				// check for flags
+				if ( Array.isArray( flags ) && flags.includes( result.length % stride ) && RE.FLAGS.test( current ) ) {
+
+					state = INT;
+					number = current;
+					newNumber();
+					continue;
+
+				}
 
 				// parse until next number
 				if ( state === SEP ) {
@@ -37684,7 +37693,7 @@ SVGLoader.prototype = Object.assign( Object.create( threePlatformize.Loader.prot
 				}
 
 				// parse exponent part
-				if ( state == EXP ) {
+				if ( state === EXP ) {
 
 					if ( RE.DIGIT.test( current ) ) {
 
@@ -38161,6 +38170,443 @@ SVGLoader.prototype = Object.assign( Object.create( threePlatformize.Loader.prot
 	}
 
 } );
+
+SVGLoader.createShapes = function ( shapePath ) {
+
+	// Param shapePath: a shapepath as returned by the parse function of this class
+	// Returns Shape object
+
+	const BIGNUMBER = 999999999;
+
+	const IntersectionLocationType = {
+		ORIGIN: 0,
+		DESTINATION: 1,
+		BETWEEN: 2,
+		LEFT: 3,
+		RIGHT: 4,
+		BEHIND: 5,
+		BEYOND: 6
+	};
+
+	const classifyResult = {
+		loc: IntersectionLocationType.ORIGIN,
+		t: 0
+	};
+
+	function findEdgeIntersection( a0, a1, b0, b1 ) {
+
+		var x1 = a0.x;
+		var x2 = a1.x;
+		var x3 = b0.x;
+		var x4 = b1.x;
+		var y1 = a0.y;
+		var y2 = a1.y;
+		var y3 = b0.y;
+		var y4 = b1.y;
+		var nom1 = ( x4 - x3 ) * ( y1 - y3 ) - ( y4 - y3 ) * ( x1 - x3 );
+		var nom2 = ( x2 - x1 ) * ( y1 - y3 ) - ( y2 - y1 ) * ( x1 - x3 );
+		var denom = ( y4 - y3 ) * ( x2 - x1 ) - ( x4 - x3 ) * ( y2 - y1 );
+		var t1 = nom1 / denom;
+		var t2 = nom2 / denom;
+
+		if ( ( ( denom === 0 ) && ( nom1 !== 0 ) ) || ( t1 <= 0 ) || ( t1 >= 1 ) || ( t2 < 0 ) || ( t2 > 1 ) ) {
+
+			//1. lines are parallel or edges don't intersect
+
+			return null;
+
+		} else if ( ( nom1 === 0 ) && ( denom === 0 ) ) {
+
+			//2. lines are colinear
+
+			//check if endpoints of edge2 (b0-b1) lies on edge1 (a0-a1)
+			for ( var i = 0; i < 2; i ++ ) {
+
+				classifyPoint( i === 0 ? b0 : b1, a0, a1 );
+				//find position of this endpoints relatively to edge1
+				if ( classifyResult.loc == IntersectionLocationType.ORIGIN ) {
+
+					var point = ( i === 0 ? b0 : b1 );
+					return { x: point.x, y: point.y, t: classifyResult.t };
+
+				} else if ( classifyResult.loc == IntersectionLocationType.BETWEEN ) {
+
+					var x = + ( ( x1 + classifyResult.t * ( x2 - x1 ) ).toPrecision( 10 ) );
+					var y = + ( ( y1 + classifyResult.t * ( y2 - y1 ) ).toPrecision( 10 ) );
+					return { x: x, y: y, t: classifyResult.t, };
+
+				}
+
+			}
+
+			return null;
+
+		} else {
+
+			//3. edges intersect
+
+			for ( var i = 0; i < 2; i ++ ) {
+
+				classifyPoint( i === 0 ? b0 : b1, a0, a1 );
+
+				if ( classifyResult.loc == IntersectionLocationType.ORIGIN ) {
+
+					var point = ( i === 0 ? b0 : b1 );
+					return { x: point.x, y: point.y, t: classifyResult.t };
+
+				}
+
+			}
+
+			var x = + ( ( x1 + t1 * ( x2 - x1 ) ).toPrecision( 10 ) );
+			var y = + ( ( y1 + t1 * ( y2 - y1 ) ).toPrecision( 10 ) );
+			return { x: x, y: y, t: t1 };
+
+		}
+
+	}
+
+	function classifyPoint( p, edgeStart, edgeEnd ) {
+
+		var ax = edgeEnd.x - edgeStart.x;
+		var ay = edgeEnd.y - edgeStart.y;
+		var bx = p.x - edgeStart.x;
+		var by = p.y - edgeStart.y;
+		var sa = ax * by - bx * ay;
+
+		if ( ( p.x === edgeStart.x ) && ( p.y === edgeStart.y ) ) {
+
+			classifyResult.loc = IntersectionLocationType.ORIGIN;
+			classifyResult.t = 0;
+			return;
+
+		}
+
+		if ( ( p.x === edgeEnd.x ) && ( p.y === edgeEnd.y ) ) {
+
+			classifyResult.loc = IntersectionLocationType.DESTINATION;
+			classifyResult.t = 1;
+			return;
+
+		}
+
+		if ( sa < - Number.EPSILON ) {
+
+			classifyResult.loc = IntersectionLocationType.LEFT;
+			return;
+
+		}
+
+		if ( sa > Number.EPSILON ) {
+
+			classifyResult.loc = IntersectionLocationType.RIGHT;
+			return;
+
+
+		}
+
+		if ( ( ( ax * bx ) < 0 ) || ( ( ay * by ) < 0 ) ) {
+
+			classifyResult.loc = IntersectionLocationType.BEHIND;
+			return;
+
+		}
+
+		if ( ( Math.sqrt( ax * ax + ay * ay ) ) < ( Math.sqrt( bx * bx + by * by ) ) ) {
+
+			classifyResult.loc = IntersectionLocationType.BEYOND;
+			return;
+
+		}
+
+		var t;
+
+		if ( ax !== 0 ) {
+
+			t = bx / ax;
+
+		} else {
+
+			t = by / ay;
+
+		}
+
+		classifyResult.loc = IntersectionLocationType.BETWEEN;
+		classifyResult.t = t;
+
+	}
+
+	function getIntersections( path1, path2 ) {
+
+		const intersectionsRaw = [];
+		const intersections = [];
+
+		for ( let index = 1; index < path1.length; index ++ ) {
+
+			const path1EdgeStart = path1[ index - 1 ];
+			const path1EdgeEnd = path1[ index ];
+
+			for ( let index2 = 1; index2 < path2.length; index2 ++ ) {
+
+				const path2EdgeStart = path2[ index2 - 1 ];
+				const path2EdgeEnd = path2[ index2 ];
+
+				const intersection = findEdgeIntersection( path1EdgeStart, path1EdgeEnd, path2EdgeStart, path2EdgeEnd );
+
+				if ( intersection !== null && intersectionsRaw.find( i => i.t <= intersection.t + Number.EPSILON && i.t >= intersection.t - Number.EPSILON ) === undefined ) {
+
+					intersectionsRaw.push( intersection );
+					intersections.push( new threePlatformize.Vector2( intersection.x, intersection.y ) );
+
+				}
+
+			}
+
+		}
+
+		return intersections;
+
+	}
+
+	function getScanlineIntersections( scanline, boundingBox, paths ) {
+
+		const center = new threePlatformize.Vector2();
+		boundingBox.getCenter( center );
+
+		const allIntersections = [];
+
+		paths.forEach( path => {
+
+			// check if the center of the bounding box is in the bounding box of the paths.
+			// this is a pruning method to limit the search of intersections in paths that can't envelop of the current path.
+			// if a path envelops another path. The center of that oter path, has to be inside the bounding box of the enveloping path.
+			if ( path.boundingBox.containsPoint( center ) ) {
+
+				const intersections = getIntersections( scanline, path.points );
+
+				intersections.forEach( p => {
+
+					allIntersections.push( { identifier: path.identifier, isCW: path.isCW, point: p } );
+
+				} );
+
+			}
+
+		} );
+
+		allIntersections.sort( ( i1, i2 ) => {
+
+			return i1.point.x - i2.point.x;
+
+		} );
+
+		return allIntersections;
+
+	}
+
+	function isHoleTo( simplePath, allPaths, scanlineMinX, scanlineMaxX, _fillRule ) {
+
+		if ( _fillRule === null || _fillRule === undefined || _fillRule === '' ) {
+
+			_fillRule = 'nonzero';
+
+		}
+
+		const centerBoundingBox = new threePlatformize.Vector2();
+		simplePath.boundingBox.getCenter( centerBoundingBox );
+
+		const scanline = [ new threePlatformize.Vector2( scanlineMinX, centerBoundingBox.y ), new threePlatformize.Vector2( scanlineMaxX, centerBoundingBox.y ) ];
+
+		const scanlineIntersections = getScanlineIntersections( scanline, simplePath.boundingBox, allPaths );
+
+		scanlineIntersections.sort( ( i1, i2 ) => {
+
+			return i1.point.x - i2.point.x;
+
+		} );
+
+		const baseIntersections = [];
+		const otherIntersections = [];
+
+		scanlineIntersections.forEach( i => {
+
+			if ( i.identifier === simplePath.identifier ) {
+
+				baseIntersections.push( i );
+
+			} else {
+
+				otherIntersections.push( i );
+
+			}
+
+		} );
+
+		const firstXOfPath = baseIntersections[ 0 ].point.x;
+
+		// build up the path hierarchy
+		const stack = [];
+		let i = 0;
+
+		while ( i < otherIntersections.length && otherIntersections[ i ].point.x < firstXOfPath ) {
+
+			if ( stack.length > 0 && stack[ stack.length - 1 ] === otherIntersections[ i ].identifier ) {
+
+				stack.pop();
+
+			} else {
+
+				stack.push( otherIntersections[ i ].identifier );
+
+			}
+
+			i ++;
+
+		}
+
+		stack.push( simplePath.identifier );
+
+		if ( _fillRule === 'evenodd' ) {
+
+			const isHole = stack.length % 2 === 0 ? true : false;
+			const isHoleFor = stack[ stack.length - 2 ];
+
+			return { identifier: simplePath.identifier, isHole: isHole, for: isHoleFor };
+
+		} else if ( _fillRule === 'nonzero' ) {
+
+			// check if path is a hole by counting the amount of paths with alternating rotations it has to cross.
+			let isHole = true;
+			let isHoleFor = null;
+			let lastCWValue = null;
+
+			for ( let i = 0; i < stack.length; i ++ ) {
+
+				const identifier = stack[ i ];
+				if ( isHole ) {
+
+					lastCWValue = allPaths[ identifier ].isCW;
+					isHole = false;
+					isHoleFor = identifier;
+
+				} else if ( lastCWValue !== allPaths[ identifier ].isCW ) {
+
+					lastCWValue = allPaths[ identifier ].isCW;
+					isHole = true;
+
+				}
+
+			}
+
+			return { identifier: simplePath.identifier, isHole: isHole, for: isHoleFor };
+
+		} else {
+
+			console.warn( 'fill-rule: "' + _fillRule + '" is currently not implemented.' );
+
+		}
+
+	}
+
+	// check for self intersecting paths
+	// TODO
+
+	// check intersecting paths
+	// TODO
+
+	// prepare paths for hole detection
+	let identifier = 0;
+
+	let scanlineMinX = BIGNUMBER;
+	let scanlineMaxX = - BIGNUMBER;
+
+	let simplePaths = shapePath.subPaths.map( p => {
+
+		const points = p.getPoints();
+		let maxY = - BIGNUMBER;
+		let minY = BIGNUMBER;
+		let maxX = - BIGNUMBER;
+		let minX = BIGNUMBER;
+
+      	//points.forEach(p => p.y *= -1);
+
+		for ( let i = 0; i < points.length; i ++ ) {
+
+			const p = points[ i ];
+
+			if ( p.y > maxY ) {
+
+				maxY = p.y;
+
+			}
+
+			if ( p.y < minY ) {
+
+				minY = p.y;
+
+			}
+
+			if ( p.x > maxX ) {
+
+				maxX = p.x;
+
+			}
+
+			if ( p.x < minX ) {
+
+				minX = p.x;
+
+			}
+
+		}
+
+		//
+		if ( scanlineMaxX <= maxX ) {
+
+			scanlineMaxX = maxX + 1;
+
+		}
+
+		if ( scanlineMinX >= minX ) {
+
+			scanlineMinX = minX - 1;
+
+		}
+
+		return { points: points, isCW: threePlatformize.ShapeUtils.isClockWise( points ), identifier: identifier ++, boundingBox: new threePlatformize.Box2( new threePlatformize.Vector2( minX, minY ), new threePlatformize.Vector2( maxX, maxY ) ) };
+
+	} );
+
+	simplePaths = simplePaths.filter( sp => sp.points.length > 0 );
+
+	// check if path is solid or a hole
+	const isAHole = simplePaths.map( p => isHoleTo( p, simplePaths, scanlineMinX, scanlineMaxX, shapePath.userData.style.fillRule ) );
+
+
+	const shapesToReturn = [];
+	simplePaths.forEach( p => {
+
+		const amIAHole = isAHole[ p.identifier ];
+
+		if ( ! amIAHole.isHole ) {
+
+			const shape = new threePlatformize.Shape( p.points );
+			const holes = isAHole.filter( h => h.isHole && h.for === p.identifier );
+			holes.forEach( h => {
+
+				const path = simplePaths[ h.identifier ];
+				shape.holes.push( new threePlatformize.Path( path.points ) );
+
+			} );
+			shapesToReturn.push( shape );
+
+		}
+
+	} );
+
+	return shapesToReturn;
+
+};
 
 SVGLoader.getStrokeStyle = function ( width, color, lineJoin, lineCap, miterLimit ) {
 
@@ -43893,6 +44339,12 @@ class DemoHDRPrefilterTexture extends Demo {
  */
 
 var DeviceOrientationControls = function ( object ) {
+
+	if ( threePlatformize.$window.isSecureContext === false ) {
+
+		console.error( 'THREE.DeviceOrientationControls: DeviceOrientationEvent is only available in secure contexts (https)' );
+
+	}
 
 	var scope = this;
 	var changeEvent = { type: 'change' };
