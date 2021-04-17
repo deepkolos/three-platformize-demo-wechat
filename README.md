@@ -2,6 +2,8 @@
 
 [three-platformize](https://github.com/deepkolos/three-platformize)
 
+需要最基本的demo可参考[three-platformize-demo-wechat-simple](https://github.com/deepkolos/three-platformize-demo-wechat-simple)
+
 <div>
   <img src="https://raw.githubusercontent.com/deepkolos/three-platformize-demo-wechat/master/demo.gif" width="250" alt="" style="display:inline-block;"/>
 </div>

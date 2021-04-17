@@ -6,12 +6,10 @@ import commonjs from '@rollup/plugin-commonjs';
 const production = !process.env.ROLLUP_WATCH;
 
 const plugins = [
+  terser(),
   resolve({ extensions: ['.ts', '.js'] }),
   commonjs(),
-  // terser(),
-  sucrase({
-    transforms: ['typescript']
-  })
+  sucrase({ transforms: ['typescript'] })
 ]
 
 export default [
@@ -20,8 +18,9 @@ export default [
     treeshake: true,
     output: {
       format: 'cjs',
-      dir: 'miniprogram/build',
-      chunkFileNames: 'chunk-[name].js',
+      dir: 'miniprogram/',
+      chunkFileNames: 'chunks/[name].js',
+      entryFileNames: 'pages/[name]/[name].js',
       manualChunks: {
         'three-platformize': ['three-platformize']
       }
