@@ -86,10 +86,16 @@
   height: 100%;
 }
 
-.btn-screenshot {
+.btn-screenshot,
+.btn-screenrecord {
   position: absolute;
   bottom: 40rpx;
   left: 40rpx;
   padding: 12rpx 18rpx;
   border: 1px solid;
+  background-color: white;
+}
+
+.btn-screenrecord {
+  bottom: 130rpx;
 }

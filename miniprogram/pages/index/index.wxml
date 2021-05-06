@@ -16,4 +16,5 @@
   </canvas>
 
   <cover-view class="btn-screenshot" bindtap="screenshot">截图</cover-view>
+  <cover-view class="btn-screenrecord" bindtap="screenrecord">录屏</cover-view>
 </view>

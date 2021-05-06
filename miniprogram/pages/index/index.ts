@@ -1,5 +1,5 @@
 // index.ts
-import { $requestAnimationFrame as requestAnimationFrame, $window as window, Clock, PerspectiveCamera, PLATFORM, Scene, sRGBEncoding, TextureLoader, WebGL1Renderer, WebGLRenderTarget, REVISION } from 'three-platformize'
+import { $requestAnimationFrame as requestAnimationFrame, $window as window, Clock, PerspectiveCamera, PLATFORM, Scene, sRGBEncoding, TextureLoader, WebGL1Renderer, WebGLRenderTarget, REVISION, Color, BoxBufferGeometry, MeshBasicMaterial, Mesh } from 'three-platformize'
 import { WechatPlatform } from 'three-platformize/src/WechatPlatform'
 import { GLTFLoader } from 'three-platformize/examples/jsm/loaders/GLTFLoader'
 import { DemoDeps, Demo, DemoGLTFLoader, DemoThreeSpritePlayer, DemoDeviceOrientationControls, DemoRGBELoader, DemoSVGLoader, DemoOBJLoader, DemoMeshOpt, DemoEXRLoader, DemoHDRPrefilterTexture, DemoMTLLoader, DemoLWOLoader, DemoFBXLoader, DemoBVHLoader, DemoColladaLoader, DemoMeshQuantization, DemoTTFLoader, DemoSTLLoader, DemoPDBLoader, DemoTGALoader, DemoMemoryTest } from 'three-platformize-demo/src/index'
@@ -92,13 +92,13 @@ Page({
   initCanvas(canvas, helperCanvas) {
     const platform = new WechatPlatform(canvas);
     this.platform = platform;
-    platform.enableDeviceOrientation('game');
+    // platform.enableDeviceOrientation('game');
     PLATFORM.set(platform);
 
     console.log(window.innerWidth, window.innerHeight)
     console.log(canvas.width, canvas.height)
 
-    const renderer = new WebGL1Renderer({ canvas, antialias: true, alpha: true });
+    const renderer = new WebGL1Renderer({ canvas, antialias: true, alpha: false });
     const camera = new PerspectiveCamera(75, canvas.width / canvas.height, 0.1, 1000);
     const scene = new Scene();
     const clock = new Clock();
@@ -109,9 +109,11 @@ Page({
     this.helperCanvas = helperCanvas;
 
     scene.position.z = -3;
+    scene.background = new Color(0xffffff);
     renderer.outputEncoding = sRGBEncoding;
+    renderer.setPixelRatio(2);
+    // renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(canvas.width, canvas.height);
-    renderer.setPixelRatio(window.devicePixelRatio);
 
     const render = () => {
       if (this.disposing) return
@@ -178,6 +180,46 @@ Page({
           urls: [res.tempFilePath],
         })
       }
+    })
+  },
+
+  async screenrecord() {
+    console.log('screenrecord clicked')
+    const fps = 20
+    const canvas = this.deps.renderer.domElement;
+    const recorder = wx.createMediaRecorder(canvas, {
+      fps,
+      videoBitsPerSecond: 600,
+      duration: 5,
+    })
+
+    await new Promise(resolve => {
+      recorder.on('start', resolve)
+      recorder.start()
+    })
+    console.log('start')
+
+    let frames = fps * 5
+    while (frames--) {
+      await new Promise(resolve => recorder.requestFrame(resolve))
+      await new Promise(resolve => setTimeout(resolve, 1000 / fps))
+      console.log(frames)
+      // render()
+    }
+
+    const { tempFilePath } = await new Promise(resolve => {
+      recorder.on('stop', resolve)
+      recorder.stop()
+    })
+    console.log(tempFilePath)
+
+    recorder.destroy()
+
+    wx.previewMedia({
+      sources: [{
+        url: tempFilePath,
+        type: "video"
+      }]
     })
   },
 
