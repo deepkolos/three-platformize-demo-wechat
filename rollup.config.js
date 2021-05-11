@@ -6,10 +6,10 @@ import commonjs from '@rollup/plugin-commonjs';
 const production = !process.env.ROLLUP_WATCH;
 
 const plugins = [
-  terser(),
   resolve({ extensions: ['.ts', '.js'] }),
   commonjs(),
-  sucrase({ transforms: ['typescript'] })
+  sucrase({ transforms: ['typescript'] }),
+  terser({ output: { comments: false } }),
 ]
 
 export default [
