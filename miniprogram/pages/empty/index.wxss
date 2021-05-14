@@ -1,8 +1,22 @@
-/* miniprogram/pages/memory/index.wxss */
-
 view {
+  color: #123456;
+}
+
+.title {
+  font-size: larger;
   text-align: center;
-  padding: 10px;
-  border: 1px solid black;
+}
+
+.desc {
+  white-space: pre;
+  font-size: smaller;
+  overflow: auto;
+  padding: 8px;
+}
+
+.btn {
+  text-align: center;
+  padding: 8px;
+  background-image: linear-gradient(to right, rgb(240, 240, 240), rgb(233, 233, 233));
   margin: 10px;
 }
