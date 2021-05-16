@@ -8,6 +8,11 @@
   <img src="https://raw.githubusercontent.com/deepkolos/three-platformize-demo-wechat/master/demo.gif" width="250" alt="" style="display:inline-block;"/>
 </div>
 
+<div>
+  <img src="https://raw.githubusercontent.com/deepkolos/three-platformize-demo-wechat/master/qrcode.jpg" width="200" alt="" style="display:inline-block;"/>
+</div>
+
+
 # 运行
 
 请使用**最新版本**的微信开发工具打开，切换到自己的测试appId即可运行，**打开调试模式**
