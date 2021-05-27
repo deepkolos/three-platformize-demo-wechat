@@ -16,5 +16,7 @@ Page({
     wx.navigateTo({
       url: '/pages/index-copy/index-copy',
     })
-  }
+  },
+
+  onShareAppMessage() { }
 })

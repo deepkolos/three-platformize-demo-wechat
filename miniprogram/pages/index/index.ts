@@ -227,5 +227,7 @@ Page({
     this.disposing = true;
     (this.currDemo as Demo)?.dispose()
     PLATFORM.dispose()
-  }
+  },
+
+  onShareAppMessage() { }
 })
