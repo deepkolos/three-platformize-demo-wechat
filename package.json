@@ -11,8 +11,8 @@
   "author": "",
   "license": "",
   "dependencies": {
-    "three-platformize": "^1.129.0",
-    "three-platformize-demo": "^1.0.6"
+    "three-platformize": "^1.133.1",
+    "three-platformize-demo": "^1.0.10"
   },
   "devDependencies": {
     "@rollup/plugin-commonjs": "^17.0.0",
